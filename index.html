@@ -90,21 +90,29 @@
     </div>
     <div class="modal-body">
       <label>종류
-        <select id="fType">
-          <option value="항공">✈️ 항공</option>
-          <option value="숙소">🏨 숙소</option>
-          <option value="식당">🍽️ 식당</option>
-          <option value="이동">🚗 이동</option>
-          <option value="기타" selected>📝 기타</option>
-        </select>
-      </label>
-      <label>시간
-        <div class="time-select-row">
-          <select id="fTimeH"></select>
-          <span>:</span>
-          <select id="fTimeM"></select>
+        <div class="icon-grid" id="fTypeGrid">
+          <button type="button" class="icon-opt" data-value="항공"><span class="ic">✈️</span><span>항공</span></button>
+          <button type="button" class="icon-opt" data-value="숙소"><span class="ic">🏨</span><span>숙소</span></button>
+          <button type="button" class="icon-opt" data-value="식당"><span class="ic">🍽️</span><span>식당</span></button>
+          <button type="button" class="icon-opt" data-value="카페"><span class="ic">☕</span><span>카페</span></button>
+          <button type="button" class="icon-opt" data-value="명소"><span class="ic">📍</span><span>명소</span></button>
+          <button type="button" class="icon-opt" data-value="이동"><span class="ic">🚇</span><span>이동</span></button>
+          <button type="button" class="icon-opt" data-value="쇼핑"><span class="ic">🛍️</span><span>쇼핑</span></button>
+          <button type="button" class="icon-opt" data-value="기타"><span class="ic">📝</span><span>기타</span></button>
         </div>
       </label>
+      <div class="field-row">
+        <label>시간
+          <div class="time-select-row">
+            <select id="fTimeH"></select>
+            <span>:</span>
+            <select id="fTimeM"></select>
+          </div>
+        </label>
+        <label>날짜
+          <select id="fDate"></select>
+        </label>
+      </div>
       <label>이름 *
         <input type="text" id="fName" placeholder="예: 타임아웃 마켓, 동 루이스 다리">
       </label>
@@ -115,8 +123,17 @@
         <input type="text" id="fMapUrl" placeholder="https://maps.app.goo.gl/... 붙여넣기">
       </label>
       <p class="hint">💡 짧은 링크(goo.gl)는 위치 좌표를 못 읽어요. 브라우저에서 링크를 한 번 열어 주소창의 전체 주소를 복사해 붙여넣으면 지도에 바로 표시돼요.</p>
-      <label>🚶 이동 방법 (선택)
-        <input type="text" id="fMove" placeholder="예: 도보 / 지하철 / 택시">
+      <label>🚶 이동 방법 (선택, 다시 누르면 해제)
+        <div class="icon-grid" id="fMoveGrid">
+          <button type="button" class="icon-opt" data-value="도보"><span class="ic">🚶</span><span>도보</span></button>
+          <button type="button" class="icon-opt" data-value="지하철"><span class="ic">🚇</span><span>지하철</span></button>
+          <button type="button" class="icon-opt" data-value="버스"><span class="ic">🚌</span><span>버스</span></button>
+          <button type="button" class="icon-opt" data-value="트램"><span class="ic">🚋</span><span>트램</span></button>
+          <button type="button" class="icon-opt" data-value="기차"><span class="ic">🚆</span><span>기차</span></button>
+          <button type="button" class="icon-opt" data-value="택시"><span class="ic">🚕</span><span>택시</span></button>
+          <button type="button" class="icon-opt" data-value="항공"><span class="ic">✈️</span><span>항공</span></button>
+          <button type="button" class="icon-opt" data-value="자전거"><span class="ic">🚲</span><span>자전거</span></button>
+        </div>
       </label>
       <div class="field-row">
         <label>💰 금액 (선택)

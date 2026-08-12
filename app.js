@@ -18,7 +18,8 @@ let selectedDay = null;      // "YYYY-MM-DD"
 let editingEventId = null;   // null = new
 let editingFlightId = null;  // null = new
 let pendingAttachments = [];
-let map = null, markersLayer = null, routeLine = null;
+let map = null, markersLayer = null, routeLine = null, walkerMarker = null, walkerAnim = null;
+let lastActivePt = null;
 let routePoints = [];
 let routeStepIndex = -1;
 let dayUnresolvedCount = 0;
@@ -28,7 +29,28 @@ const firedAlarms = new Set();
 const $ = (id) => document.getElementById(id);
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 const DOW = ['일', '월', '화', '수', '목', '금', '토'];
-const TYPE_ICON = { '항공': '✈️', '숙소': '🏨', '식당': '🍽️', '이동': '🚗', '기타': '📝' };
+const TYPE_ICON = { '항공': '✈️', '숙소': '🏨', '식당': '🍽️', '카페': '☕', '명소': '📍', '이동': '🚇', '쇼핑': '🛍️', '기타': '📝' };
+const MOVE_ICON = { '도보': '🚶', '지하철': '🚇', '버스': '🚌', '트램': '🚋', '기차': '🚆', '택시': '🚕', '항공': '✈️', '자전거': '🚲' };
+
+function setupIconGrid(gridId, { clearable = true } = {}) {
+  document.querySelectorAll(`#${gridId} .icon-opt`).forEach(btn => {
+    btn.addEventListener('click', () => {
+      const grid = btn.parentElement;
+      if (clearable && btn.classList.contains('selected')) {
+        btn.classList.remove('selected');
+        return;
+      }
+      grid.querySelectorAll('.icon-opt').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+    });
+  });
+}
+function getIconGridValue(gridId) {
+  return document.querySelector(`#${gridId} .icon-opt.selected`)?.dataset.value || '';
+}
+function setIconGridValue(gridId, value) {
+  document.querySelectorAll(`#${gridId} .icon-opt`).forEach(b => b.classList.toggle('selected', b.dataset.value === value));
+}
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -510,7 +532,7 @@ function renderEvents() {
     div.innerHTML = `
       <div class="event-top">
         <span class="event-time">${ev.time ? escapeHtml(ev.time) : '--:--'}</span>
-        <span class="event-type">${TYPE_ICON[ev.type] || '📝'} ${escapeHtml(ev.type)}${ev.move ? ' · 🚶 ' + escapeHtml(ev.move) : ''}${ev.alarm ? ' · 🔔 ' + escapeHtml(ev.alarm) : ''}</span>
+        <span class="event-type">${TYPE_ICON[ev.type] || '📝'} ${escapeHtml(ev.type)}${ev.move ? ' · ' + (MOVE_ICON[ev.move] || '🚶') + ' ' + escapeHtml(ev.move) : ''}${ev.alarm ? ' · 🔔 ' + escapeHtml(ev.alarm) : ''}</span>
       </div>
       <div class="event-name">${escapeHtml(ev.name)}</div>
       ${ev.note ? `<div class="event-note">${escapeHtml(ev.note)}</div>` : ''}
@@ -560,12 +582,21 @@ function openEventModal(id) {
   editingEventId = id;
   const ev = id ? (trip.days[selectedDay] || []).find(e => e.id === id) : null;
   $('eventModalTitle').textContent = id ? '일정 편집' : '일정 추가';
-  $('fType').value = ev?.type || '기타';
+  setIconGridValue('fTypeGrid', ev?.type || '기타');
   setTimeSelectValue($('fTimeH'), $('fTimeM'), ev?.time || '');
+  const dateSel = $('fDate');
+  dateSel.innerHTML = '';
+  dayList(trip).forEach(d => {
+    const opt = document.createElement('option');
+    opt.value = d.date;
+    opt.textContent = `${fmtMD(d.date)} (${d.dow})${d.city ? ' · ' + d.city : ''}`;
+    if (d.date === selectedDay) opt.selected = true;
+    dateSel.appendChild(opt);
+  });
   $('fName').value = ev?.name || '';
   $('fPlace').value = ev?.place || '';
   $('fMapUrl').value = ev?.mapUrl || '';
-  $('fMove').value = ev?.move || '';
+  setIconGridValue('fMoveGrid', ev?.move || '');
   $('fAmount').value = ev?.amount ?? '';
   $('fCurrency').value = ev?.currency || '원';
   setTimeSelectValue($('fAlarmH'), $('fAlarmM'), ev?.alarm || '');
@@ -617,27 +648,36 @@ $('btnSaveEvent').addEventListener('click', () => {
   if (!trip || !selectedDay) return;
   const name = $('fName').value.trim();
   if (!name) { toast('이름을 입력해주세요'); return; }
+  const targetDate = $('fDate').value || selectedDay;
   const data = {
-    type: $('fType').value,
+    type: getIconGridValue('fTypeGrid') || '기타',
     time: getTimeSelectValue($('fTimeH'), $('fTimeM')),
     name,
     place: $('fPlace').value.trim(),
     mapUrl: $('fMapUrl').value.trim(),
-    move: $('fMove').value.trim(),
+    move: getIconGridValue('fMoveGrid'),
     amount: $('fAmount').value ? Number($('fAmount').value) : null,
     currency: $('fCurrency').value,
     alarm: getTimeSelectValue($('fAlarmH'), $('fAlarmM')) || null,
     note: $('fNote').value.trim(),
     attachments: pendingAttachments
   };
-  if (!trip.days[selectedDay]) trip.days[selectedDay] = [];
+  if (!trip.days[targetDate]) trip.days[targetDate] = [];
   if (editingEventId) {
-    Object.assign(trip.days[selectedDay].find(e => e.id === editingEventId), data);
+    if (targetDate !== selectedDay) {
+      trip.days[selectedDay] = trip.days[selectedDay].filter(e => e.id !== editingEventId);
+      trip.days[targetDate].push({ id: editingEventId, ...data });
+      selectedDay = targetDate;
+    } else {
+      Object.assign(trip.days[selectedDay].find(e => e.id === editingEventId), data);
+    }
   } else {
-    trip.days[selectedDay].push({ id: uid(), ...data });
+    trip.days[targetDate].push({ id: uid(), ...data });
+    selectedDay = targetDate;
   }
   saveData();
   closeModal('eventModal');
+  renderDayTabs();
   renderEvents();
   renderDocs();
 });
@@ -829,6 +869,30 @@ function initMap() {
   markersLayer = L.layerGroup().addTo(map);
 }
 
+function animateWalker(fromLatLng, toLatLng, durationMs) {
+  if (walkerAnim) cancelAnimationFrame(walkerAnim);
+  if (!walkerMarker) {
+    const icon = L.divIcon({ className: 'walker-icon', html: '🚶', iconSize: [22, 22], iconAnchor: [11, 11] });
+    walkerMarker = L.marker(fromLatLng, { icon, zIndexOffset: 2000 }).addTo(map);
+  } else {
+    walkerMarker.setLatLng(fromLatLng);
+  }
+  walkerMarker.setOpacity(1);
+  const start = performance.now();
+  function step(now) {
+    const t = Math.min((now - start) / durationMs, 1);
+    const lat = fromLatLng[0] + (toLatLng[0] - fromLatLng[0]) * t;
+    const lng = fromLatLng[1] + (toLatLng[1] - fromLatLng[1]) * t;
+    walkerMarker.setLatLng([lat, lng]);
+    if (t < 1) {
+      walkerAnim = requestAnimationFrame(step);
+    } else {
+      setTimeout(() => walkerMarker && walkerMarker.setOpacity(0), 300);
+    }
+  }
+  walkerAnim = requestAnimationFrame(step);
+}
+
 function extractLatLngFromUrl(url) {
   if (!url) return null;
   const patterns = [
@@ -852,6 +916,9 @@ async function renderMapForSelectedDay() {
   routePoints = [];
   routeStepIndex = -1;
   dayUnresolvedCount = 0;
+  lastActivePt = null;
+  if (walkerAnim) cancelAnimationFrame(walkerAnim);
+  if (walkerMarker) { map.removeLayer(walkerMarker); walkerMarker = null; }
   if (!trip || !selectedDay) { renderStepBar(); return; }
   const cityContext = dayList(trip).find(d => d.date === selectedDay)?.city || '';
   const events = (trip.days[selectedDay] || []).slice().sort((a, b) => (a.time || '').localeCompare(b.time || ''));
@@ -920,20 +987,27 @@ function renderStepBar() {
   if (routeStepIndex === -1) {
     bar.style.width = '0%';
     summary.innerHTML = `오늘 일정 ${n}개 · <span class="sub">다음을 눌러 시작해요</span>`;
+    lastActivePt = null;
+    if (walkerMarker) walkerMarker.setOpacity(0);
     return;
   }
   if (routeStepIndex >= n) {
     bar.style.width = '100%';
     summary.innerHTML = `🎉 오늘의 동선 끝! <span class="sub">즐거운 여행 되세요</span>`;
+    lastActivePt = null;
+    if (walkerMarker) walkerMarker.setOpacity(0);
     return;
   }
   bar.style.width = `${((routeStepIndex + 1) / n) * 100}%`;
   const pt = routePoints[routeStepIndex];
-  summary.innerHTML = `${pt.ev.time ? escapeHtml(pt.ev.time) + ' ' : ''}${escapeHtml(pt.ev.name)}${pt.ev.move ? `<span class="sub">🚶 ${escapeHtml(pt.ev.move)}</span>` : ''}`;
+  summary.innerHTML = `${pt.ev.time ? escapeHtml(pt.ev.time) + ' ' : ''}${escapeHtml(pt.ev.name)}${pt.ev.move ? `<span class="sub">${MOVE_ICON[pt.ev.move] || '🚶'} ${escapeHtml(pt.ev.move)}</span>` : ''}`;
   const el = pt.marker.getElement();
   if (el) el.querySelector('.route-pin-outer')?.classList.add('active');
   pt.marker.getTooltip()?.getElement()?.classList.add('active');
-  map.flyTo([pt.lat, pt.lon], Math.max(map.getZoom(), 15), { duration: 0.4 });
+  const duration = 0.6;
+  if (lastActivePt) animateWalker([lastActivePt.lat, lastActivePt.lon], [pt.lat, pt.lon], duration * 1000);
+  lastActivePt = { lat: pt.lat, lon: pt.lon };
+  map.flyTo([pt.lat, pt.lon], Math.max(map.getZoom(), 15), { duration });
   pt.marker.openTooltip();
 }
 
@@ -975,6 +1049,8 @@ function onTripChanged() {
   populateTimeSelect($('fAlarmH'), $('fAlarmM'));
   populateTimeSelect($('flDepH'), $('flDepM'));
   populateTimeSelect($('flArrH'), $('flArrM'));
+  setupIconGrid('fTypeGrid', { clearable: false });
+  setupIconGrid('fMoveGrid', { clearable: true });
   if (!DATA.activeTripId && DATA.trips.length) DATA.activeTripId = DATA.trips[0].id;
   onTripChanged();
 })();
