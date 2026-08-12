@@ -829,6 +829,21 @@ function initMap() {
   markersLayer = L.layerGroup().addTo(map);
 }
 
+function extractLatLngFromUrl(url) {
+  if (!url) return null;
+  const patterns = [
+    /@(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/,
+    /!3d(-?\d{1,3}\.\d+)!4d(-?\d{1,3}\.\d+)/,
+    /[?&](?:q|ll|query)=(-?\d{1,3}\.\d+)[,\s]\+?(-?\d{1,3}\.\d+)/,
+    /\/(-?\d{1,3}\.\d+),\+?(-?\d{1,3}\.\d+)(?:[,?/]|$)/
+  ];
+  for (const re of patterns) {
+    const m = url.match(re);
+    if (m) return { lat: parseFloat(m[1]), lon: parseFloat(m[2]) };
+  }
+  return null;
+}
+
 async function renderMapForSelectedDay() {
   const trip = getActiveTrip();
   initMap();
@@ -841,8 +856,9 @@ async function renderMapForSelectedDay() {
   const cityContext = dayList(trip).find(d => d.date === selectedDay)?.city || '';
   const events = (trip.days[selectedDay] || []).slice().sort((a, b) => (a.time || '').localeCompare(b.time || ''));
   for (const ev of events) {
+    const fromUrl = extractLatLngFromUrl(ev.mapUrl);
     const q = ev.place || ev.name;
-    const p = await geocode(q, cityContext);
+    const p = fromUrl || await geocode(q, cityContext);
     if (p) routePoints.push({ ev, lat: p.lat, lon: p.lon });
     else dayUnresolvedCount++;
   }
