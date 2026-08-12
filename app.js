@@ -912,9 +912,16 @@ function animateWalker(path, durationMs, iconEmoji) {
   }
   walkerMarker.setOpacity(1);
   const start = performance.now();
+  let centered = false;
   function step(now) {
     const t = Math.min((now - start) / durationMs, 1);
-    walkerMarker.setLatLng(pointAtFraction(path, t));
+    const pos = pointAtFraction(path, t);
+    walkerMarker.setLatLng(pos);
+    try {
+      const cll = L.latLng(pos);
+      if (!centered && !map.getBounds().pad(-0.05).contains(cll)) centered = true;
+      if (centered) map.panTo(cll, { animate: false });
+    } catch (e) { /* ignore */ }
     if (t < 1) {
       walkerAnim = requestAnimationFrame(step);
     } else {
@@ -1069,15 +1076,15 @@ function renderStepBar() {
   pt.marker.getTooltip()?.getElement()?.classList.add('active');
   const legMeters = pt.legPath ? pathLengthKm(pt.legPath) * 1000 : 0;
   const walkDurationMs = Math.min(4200, Math.max(1600, legMeters * 4));
-  const duration = walkDurationMs / 1000;
   const movingForward = lastRenderedStepIndex === routeStepIndex - 1;
-  if (movingForward && pt.legPath) {
-    animateWalker(pt.legPath, walkDurationMs, MOVE_ICON[pt.ev.move] || '🚶');
-  } else if (walkerMarker) {
-    walkerMarker.setOpacity(0);
-  }
   lastRenderedStepIndex = routeStepIndex;
-  map.flyTo([pt.lat, pt.lon], Math.max(map.getZoom(), 15), { duration });
+  if (movingForward && pt.legPath) {
+    // Camera stays put and only snaps (non-animated) if the walker leaves view — matches original behavior.
+    animateWalker(pt.legPath, walkDurationMs, MOVE_ICON[pt.ev.move] || '🚶');
+  } else {
+    if (walkerMarker) walkerMarker.setOpacity(0);
+    map.flyTo([pt.lat, pt.lon], Math.max(map.getZoom(), 15), { duration: 0.5 });
+  }
   pt.marker.openTooltip();
 }
 
