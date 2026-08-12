@@ -51,11 +51,19 @@
     <div class="section-block">
       <div class="section-title-row">
         <h2>🗺️ 오늘의 동선</h2>
-        <button id="btnPlayRoute" class="link-btn">▶ 동선 보기</button>
       </div>
       <div id="dayTabsOverview" class="day-tabs"></div>
+      <div class="route-progress-track"><div id="routeProgressBar" class="route-progress-fill"></div></div>
       <div id="map"></div>
-      <p class="hint">핀을 누르면 해당 일정으로 이동해요</p>
+      <div class="route-step-bar">
+        <div id="routeStepSummary" class="route-step-summary">일정을 추가하면 동선이 여기 표시돼요</div>
+        <div class="route-step-controls">
+          <button id="btnStepPrev" class="step-btn">◀ 이전</button>
+          <button id="btnStepNow" class="step-btn now">지금</button>
+          <button id="btnStepNext" class="step-btn">다음 ▶</button>
+        </div>
+      </div>
+      <p class="hint">핀을 누르거나 이전·다음으로 동선을 따라가봐요</p>
     </div>
   </section>
 
@@ -160,6 +168,10 @@
       <button class="modal-close" data-close="flightModal">✕</button>
     </div>
     <div class="modal-body">
+      <label>🎫 티켓 파일로 자동 입력 (선택)
+        <input type="file" id="flAutoFile" accept="application/pdf,image/*">
+      </label>
+      <p class="hint">PDF·이미지에서 편명·공항코드·날짜·시간을 최대한 읽어봐요. 인식이 틀릴 수 있으니 저장 전 꼭 확인해주세요.</p>
       <label>구분
         <select id="flTag">
           <option value="출발">출발</option>

@@ -156,6 +156,66 @@ body {
 
 #map { height: 320px; border-radius: 12px; overflow: hidden; margin-top: 8px; border: 1px solid var(--line); position: relative; z-index: 0; }
 
+.route-progress-track { height: 5px; border-radius: 999px; background: var(--line); margin-top: 4px; overflow: hidden; }
+.route-progress-fill { height: 100%; width: 0%; background: var(--brand); transition: width 0.25s ease; }
+
+.route-step-bar {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fafbfc;
+  padding: 10px 12px;
+}
+.route-step-summary { font-size: 14px; font-weight: 700; min-height: 20px; }
+.route-step-summary .sub { font-weight: 400; color: var(--ink-soft); font-size: 12px; margin-left: 4px; }
+.route-step-controls { display: flex; gap: 8px; margin-top: 8px; }
+.step-btn {
+  flex: 1;
+  border: 1px solid var(--line);
+  background: white;
+  border-radius: 10px;
+  padding: 9px 6px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  color: var(--ink);
+}
+.step-btn.now { color: var(--brand); border-color: var(--brand); }
+.step-btn:disabled { opacity: 0.4; cursor: default; }
+
+.route-pin {
+  width: 30px; height: 30px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: var(--brand);
+  border: 2px solid white;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.35);
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+.route-pin .emoji { transform: rotate(45deg); font-size: 14px; }
+.route-pin .num {
+  position: absolute; top: -8px; right: -8px;
+  width: 17px; height: 17px; border-radius: 50%;
+  background: var(--accent); color: white;
+  font-size: 10px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  transform: rotate(45deg);
+  border: 1.5px solid white;
+}
+.route-pin.active { background: var(--accent); width: 36px; height: 36px; z-index: 1000 !important; }
+.route-pin-label {
+  background: white !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 8px !important;
+  padding: 3px 7px !important;
+  font-size: 11px !important;
+  font-weight: 700;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+}
+.route-pin-label.active { color: var(--accent); border-color: var(--accent) !important; }
+.route-pin-label::before { display: none; }
+
 .day-tabs {
   display: flex;
   gap: 8px;
@@ -343,9 +403,3 @@ hr { border: none; border-top: 1px solid var(--line); margin: 4px 0; }
   z-index: 200;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-
-.leaflet-marker-char {
-  font-size: 26px;
-  line-height: 1;
-  filter: drop-shadow(0 2px 3px rgba(0,0,0,0.4));
-}

@@ -18,7 +18,9 @@ let selectedDay = null;      // "YYYY-MM-DD"
 let editingEventId = null;   // null = new
 let editingFlightId = null;  // null = new
 let pendingAttachments = [];
-let map = null, markersLayer = null, routeLine = null, charMarker = null, animReq = null;
+let map = null, markersLayer = null, routeLine = null;
+let routePoints = [];
+let routeStepIndex = -1;
 const firedAlarms = new Set();
 
 /* ---------- utils ---------- */
@@ -246,11 +248,119 @@ function splitDateTime(v) {
   });
 });
 
+/* ---------- ticket auto-fill (PDF / image) ---------- */
+const loadedScripts = {};
+function loadScript(src) {
+  if (!loadedScripts[src]) {
+    loadedScripts[src] = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('script load failed: ' + src));
+      document.head.appendChild(s);
+    });
+  }
+  return loadedScripts[src];
+}
+async function extractPdfText(file) {
+  await loadScript('https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  let text = '';
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map(it => it.str).join(' ') + '\n';
+  }
+  return text;
+}
+async function extractImageText(file) {
+  await loadScript('https://unpkg.com/tesseract.js@5/dist/tesseract.min.js');
+  const { data } = await Tesseract.recognize(file, 'eng');
+  return data.text;
+}
+const MONTH_MAP = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12 };
+const CODE_BLACKLIST = new Set(['PDF', 'USD', 'KRW', 'EUR', 'GMT', 'UTC', 'ETK', 'ETC', 'AM', 'PM', 'THE', 'AND', 'FOR', 'KEY', 'SSR', 'SEQ', 'REF', 'PNR', 'ADT', 'CHD', 'INF', 'NBR', 'NO1']);
+function normalizeDate(y, m, d) {
+  y = parseInt(y, 10); if (y < 100) y += 2000;
+  return `${y}-${pad(m)}-${pad(d)}`;
+}
+function roundTo5(t) {
+  const [h, m] = t.split(':').map(Number);
+  let total = ((h * 60 + Math.round(m / 5) * 5) % 1440 + 1440) % 1440;
+  return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
+}
+function extractDates(upper) {
+  const dates = [];
+  let m;
+  const isoRe = /\b(20\d{2})-(\d{2})-(\d{2})\b/g;
+  while ((m = isoRe.exec(upper))) dates.push(normalizeDate(m[1], m[2], m[3]));
+  const dmyRe = /\b(\d{1,2})\s*[-/ ]?\s*(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\s*[-/ ']?\s*(\d{2,4})\b/g;
+  while ((m = dmyRe.exec(upper))) dates.push(normalizeDate(m[3], MONTH_MAP[m[2]], m[1]));
+  return dates;
+}
+function extractTimes(text) {
+  const times = [];
+  let m;
+  const re24 = /\b([01]\d|2[0-3]):([0-5]\d)\b/g;
+  while ((m = re24.exec(text))) times.push(`${m[1]}:${m[2]}`);
+  return times;
+}
+function extractFlightNo(upper) {
+  const m = upper.match(/\b([A-Z]{2})[\s-]?(\d{2,4})\b/);
+  return m ? `${m[1]}${m[2]}` : '';
+}
+function extractAirportCodes(upper) {
+  const pair = upper.match(/\b([A-Z]{3})\s*(?:-|–|—|→|>|TO)\s*([A-Z]{3})\b/);
+  if (pair) return [pair[1], pair[2]];
+  const all = [...upper.matchAll(/\b([A-Z]{3})\b/g)].map(x => x[1]).filter(c => !CODE_BLACKLIST.has(c));
+  const uniq = [...new Set(all)];
+  return [uniq[0] || '', uniq[1] || ''];
+}
+function parseTicketText(text) {
+  const upper = text.toUpperCase();
+  const dates = extractDates(upper);
+  const times = extractTimes(text);
+  const [fromCode, toCode] = extractAirportCodes(upper);
+  return {
+    flNo: extractFlightNo(upper),
+    fromCode, toCode,
+    depDate: dates[0] || '',
+    arrDate: dates[1] || dates[0] || '',
+    depTime: times[0] || '',
+    arrTime: times[1] || ''
+  };
+}
+$('flAutoFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  toast('티켓 인식 중... 잠시만요');
+  try {
+    const text = f.type === 'application/pdf' ? await extractPdfText(f) : await extractImageText(f);
+    const info = parseTicketText(text);
+    const filled = [];
+    if (info.flNo) { $('flNo').value = info.flNo; filled.push('편명'); }
+    if (info.fromCode) { $('flFromCode').value = info.fromCode; filled.push('출발코드'); }
+    if (info.toCode) { $('flToCode').value = info.toCode; filled.push('도착코드'); }
+    if (info.depDate) { $('flDepDate').value = info.depDate; filled.push('출발일'); }
+    if (info.depTime) { setTimeSelectValue($('flDepH'), $('flDepM'), roundTo5(info.depTime)); filled.push('출발시간'); }
+    if (info.arrDate) { $('flArrDate').value = info.arrDate; }
+    if (info.arrTime) { setTimeSelectValue($('flArrH'), $('flArrM'), roundTo5(info.arrTime)); filled.push('도착시간'); }
+    toast(filled.length ? `인식됨: ${filled.join(', ')} · 확인 후 저장하세요` : '인식하지 못했어요, 직접 입력해주세요');
+  } catch (err) {
+    console.error('ticket parse failed', err);
+    toast('인식 중 오류가 발생했어요');
+  }
+  e.target.value = '';
+});
+
 function openFlightModal(id) {
   const trip = getActiveTrip();
   if (!trip) { toast('먼저 여행을 만들어주세요'); return; }
   editingFlightId = id;
   const fl = id ? trip.flights.find(f => f.id === id) : null;
+  $('flAutoFile').value = '';
   $('flTag').value = fl?.tag || '출발';
   $('flNo').value = fl?.no || '';
   $('flFromCode').value = fl?.fromCode || '';
@@ -717,71 +827,102 @@ async function renderMapForSelectedDay() {
   initMap();
   markersLayer.clearLayers();
   if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
-  stopRouteAnimation();
-  if (!trip || !selectedDay) return;
+  routePoints = [];
+  routeStepIndex = -1;
+  if (!trip || !selectedDay) { renderStepBar(); return; }
   const events = (trip.days[selectedDay] || []).slice().sort((a, b) => (a.time || '').localeCompare(b.time || ''));
-  const pts = [];
   for (const ev of events) {
     const q = ev.place || ev.name;
     const p = await geocode(q);
-    if (p) {
-      pts.push({ ev, ...p });
-      const m = L.marker([p.lat, p.lon]).addTo(markersLayer);
-      m.bindPopup(`<b>${escapeHtml(ev.time || '')} ${escapeHtml(ev.name)}</b>`);
-      m.on('click', () => { openEventModal(ev.id); });
-    }
+    if (p) routePoints.push({ ev, lat: p.lat, lon: p.lon });
   }
-  if (pts.length) {
-    const latlngs = pts.map(p => [p.lat, p.lon]);
+  routePoints.forEach((pt, i) => {
+    const icon = L.divIcon({
+      className: 'route-pin-wrap',
+      html: `<div class="route-pin type-${escapeHtml(pt.ev.type)}"><span class="emoji">${TYPE_ICON[pt.ev.type] || '📝'}</span><span class="num">${i + 1}</span></div>`,
+      iconSize: [30, 30],
+      iconAnchor: [15, 28]
+    });
+    const m = L.marker([pt.lat, pt.lon], { icon }).addTo(markersLayer);
+    m.bindTooltip(`${pt.ev.time ? pt.ev.time + ' ' : ''}${escapeHtml(pt.ev.name)}`, { permanent: true, direction: 'top', offset: [0, -26], className: 'route-pin-label' });
+    m.on('click', () => { routeStepIndex = i; renderStepBar(); });
+    pt.marker = m;
+  });
+  if (routePoints.length) {
+    const latlngs = routePoints.map(p => [p.lat, p.lon]);
     routeLine = L.polyline(latlngs, { color: '#2b6cb0', weight: 3, dashArray: '6,6' }).addTo(map);
-    map.fitBounds(L.latLngBounds(latlngs), { padding: [30, 30] });
+    map.fitBounds(L.latLngBounds(latlngs), { padding: [40, 40] });
   } else {
     map.setView(SEOUL, 12);
   }
+  renderStepBar();
 }
 
 function focusEventOnMap(ev) {
   document.querySelector('.tab-btn[data-tab="overview"]').click();
-  setTimeout(async () => {
-    const q = ev.place || ev.name;
-    const p = await geocode(q);
-    if (p && map) { map.setView([p.lat, p.lon], 16); }
+  setTimeout(() => {
+    const i = routePoints.findIndex(p => p.ev.id === ev.id);
+    if (i >= 0) { routeStepIndex = i; renderStepBar(); }
     else toast('지도 위치를 찾을 수 없어요');
   }, 150);
 }
 
-$('btnPlayRoute').addEventListener('click', () => {
-  if (!routeLine) { toast('표시할 동선이 없어요'); return; }
-  animateRoute();
-});
-function stopRouteAnimation() {
-  if (animReq) cancelAnimationFrame(animReq);
-  animReq = null;
-  if (charMarker) { map.removeLayer(charMarker); charMarker = null; }
-}
-function animateRoute() {
-  stopRouteAnimation();
-  const latlngs = routeLine.getLatLngs();
-  if (latlngs.length < 2) { toast('동선이 너무 짧아요'); return; }
-  const icon = L.divIcon({ className: 'leaflet-marker-char', html: '🚶', iconSize: [26, 26] });
-  charMarker = L.marker(latlngs[0], { icon }).addTo(map);
-  const segMs = 1200;
-  const totalMs = segMs * (latlngs.length - 1);
-  const start = performance.now();
-  function step(now) {
-    const elapsed = now - start;
-    const t = Math.min(elapsed / totalMs, 1);
-    const segF = t * (latlngs.length - 1);
-    const i = Math.min(Math.floor(segF), latlngs.length - 2);
-    const localT = segF - i;
-    const a = latlngs[i], b = latlngs[i + 1];
-    const lat = a.lat + (b.lat - a.lat) * localT;
-    const lng = a.lng + (b.lng - a.lng) * localT;
-    charMarker.setLatLng([lat, lng]);
-    if (t < 1) { animReq = requestAnimationFrame(step); }
+function renderStepBar() {
+  const bar = $('routeProgressBar');
+  const summary = $('routeStepSummary');
+  const n = routePoints.length;
+  routePoints.forEach(pt => {
+    const el = pt.marker.getElement();
+    if (el) el.querySelector('.route-pin')?.classList.remove('active');
+    pt.marker.getTooltip()?.getElement()?.classList.remove('active');
+  });
+  if (!n) {
+    bar.style.width = '0%';
+    summary.innerHTML = '일정을 추가하면 동선이 여기 표시돼요';
+    $('btnStepPrev').disabled = true;
+    $('btnStepNext').disabled = true;
+    return;
   }
-  animReq = requestAnimationFrame(step);
+  $('btnStepPrev').disabled = routeStepIndex <= -1;
+  $('btnStepNext').disabled = routeStepIndex >= n;
+  if (routeStepIndex === -1) {
+    bar.style.width = '0%';
+    summary.innerHTML = `오늘 일정 ${n}개 · <span class="sub">다음을 눌러 시작해요</span>`;
+    return;
+  }
+  if (routeStepIndex >= n) {
+    bar.style.width = '100%';
+    summary.innerHTML = `🎉 오늘의 동선 끝! <span class="sub">즐거운 여행 되세요</span>`;
+    return;
+  }
+  bar.style.width = `${((routeStepIndex + 1) / n) * 100}%`;
+  const pt = routePoints[routeStepIndex];
+  summary.innerHTML = `${pt.ev.time ? escapeHtml(pt.ev.time) + ' ' : ''}${escapeHtml(pt.ev.name)}${pt.ev.move ? `<span class="sub">🚶 ${escapeHtml(pt.ev.move)}</span>` : ''}`;
+  const el = pt.marker.getElement();
+  if (el) el.querySelector('.route-pin')?.classList.add('active');
+  pt.marker.getTooltip()?.getElement()?.classList.add('active');
+  map.flyTo([pt.lat, pt.lon], Math.max(map.getZoom(), 15), { duration: 0.4 });
+  pt.marker.openTooltip();
 }
+
+$('btnStepPrev').addEventListener('click', () => {
+  if (!routePoints.length) return;
+  routeStepIndex = Math.max(-1, routeStepIndex - 1);
+  renderStepBar();
+});
+$('btnStepNext').addEventListener('click', () => {
+  if (!routePoints.length) return;
+  routeStepIndex = Math.min(routePoints.length, routeStepIndex + 1);
+  renderStepBar();
+});
+$('btnStepNow').addEventListener('click', () => {
+  if (!routePoints.length) { toast('표시할 동선이 없어요'); return; }
+  const nowHM = pad(new Date().getHours()) + ':' + pad(new Date().getMinutes());
+  let idx = routePoints.findIndex(p => (p.ev.time || '') > nowHM);
+  idx = idx === -1 ? routePoints.length - 1 : Math.max(0, idx - 1);
+  routeStepIndex = idx;
+  renderStepBar();
+});
 
 /* ---------- trip change ---------- */
 function onTripChanged() {
