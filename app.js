@@ -18,11 +18,11 @@ let selectedDay = null;      // "YYYY-MM-DD"
 let editingEventId = null;   // null = new
 let editingFlightId = null;  // null = new
 let pendingAttachments = [];
-let map = null, markersLayer = null, routeLine = null, walkerMarker = null, walkerAnim = null;
-let lastActivePt = null;
+let map = null, markersLayer = null, routeLines = [], walkerMarker = null, walkerAnim = null;
 let routePoints = [];
 let routeStepIndex = -1;
 let dayUnresolvedCount = 0;
+let lastRenderedStepIndex = null;
 const firedAlarms = new Set();
 
 /* ---------- utils ---------- */
@@ -869,21 +869,40 @@ function initMap() {
   markersLayer = L.layerGroup().addTo(map);
 }
 
-function animateWalker(fromLatLng, toLatLng, durationMs) {
+function pathLength(path) {
+  let d = 0;
+  for (let i = 1; i < path.length; i++) d += Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]);
+  return d;
+}
+function pointAtFraction(path, frac) {
+  if (path.length === 1) return path[0];
+  const total = pathLength(path);
+  if (total === 0) return path[0];
+  let target = total * frac;
+  for (let i = 1; i < path.length; i++) {
+    const segLen = Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]);
+    if (target <= segLen || i === path.length - 1) {
+      const segT = segLen === 0 ? 0 : Math.min(target / segLen, 1);
+      return [path[i - 1][0] + (path[i][0] - path[i - 1][0]) * segT, path[i - 1][1] + (path[i][1] - path[i - 1][1]) * segT];
+    }
+    target -= segLen;
+  }
+  return path[path.length - 1];
+}
+function animateWalker(path, durationMs, iconEmoji) {
   if (walkerAnim) cancelAnimationFrame(walkerAnim);
+  const icon = L.divIcon({ className: 'walker-icon', html: iconEmoji, iconSize: [22, 22], iconAnchor: [11, 11] });
   if (!walkerMarker) {
-    const icon = L.divIcon({ className: 'walker-icon', html: '🚶', iconSize: [22, 22], iconAnchor: [11, 11] });
-    walkerMarker = L.marker(fromLatLng, { icon, zIndexOffset: 2000 }).addTo(map);
+    walkerMarker = L.marker(path[0], { icon, zIndexOffset: 2000 }).addTo(map);
   } else {
-    walkerMarker.setLatLng(fromLatLng);
+    walkerMarker.setIcon(icon);
+    walkerMarker.setLatLng(path[0]);
   }
   walkerMarker.setOpacity(1);
   const start = performance.now();
   function step(now) {
     const t = Math.min((now - start) / durationMs, 1);
-    const lat = fromLatLng[0] + (toLatLng[0] - fromLatLng[0]) * t;
-    const lng = fromLatLng[1] + (toLatLng[1] - fromLatLng[1]) * t;
-    walkerMarker.setLatLng([lat, lng]);
+    walkerMarker.setLatLng(pointAtFraction(path, t));
     if (t < 1) {
       walkerAnim = requestAnimationFrame(step);
     } else {
@@ -891,6 +910,27 @@ function animateWalker(fromLatLng, toLatLng, durationMs) {
     }
   }
   walkerAnim = requestAnimationFrame(step);
+}
+
+const ROUTE_PROFILE = { '도보': 'foot', '자전거': 'bike', '택시': 'driving', '버스': 'driving' };
+async function fetchRoutePath(fromLat, fromLon, toLat, toLon, profile) {
+  const key = `osrm:${profile}:${fromLat.toFixed(5)},${fromLon.toFixed(5)};${toLat.toFixed(5)},${toLon.toFixed(5)}`;
+  if (Object.prototype.hasOwnProperty.call(DATA.geocache, key)) return DATA.geocache[key];
+  let result = null;
+  try {
+    const url = `https://router.project-osrm.org/route/v1/${profile}/${fromLon},${fromLat};${toLon},${toLat}?overview=full&geometries=geojson`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.code === 'Ok' && data.routes && data.routes[0]) {
+      result = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+    }
+  } catch (e) {
+    console.error('route fetch failed', e);
+    return null; // network error: don't cache as a permanent miss
+  }
+  DATA.geocache[key] = result;
+  saveData();
+  return result;
 }
 
 function extractLatLngFromUrl(url) {
@@ -912,11 +952,12 @@ async function renderMapForSelectedDay() {
   const trip = getActiveTrip();
   initMap();
   markersLayer.clearLayers();
-  if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+  routeLines.forEach(l => map.removeLayer(l));
+  routeLines = [];
   routePoints = [];
   routeStepIndex = -1;
   dayUnresolvedCount = 0;
-  lastActivePt = null;
+  lastRenderedStepIndex = null;
   if (walkerAnim) cancelAnimationFrame(walkerAnim);
   if (walkerMarker) { map.removeLayer(walkerMarker); walkerMarker = null; }
   if (!trip || !selectedDay) { renderStepBar(); return; }
@@ -929,6 +970,14 @@ async function renderMapForSelectedDay() {
     if (p) routePoints.push({ ev, lat: p.lat, lon: p.lon });
     else dayUnresolvedCount++;
   }
+  for (let i = 0; i < routePoints.length; i++) {
+    if (i === 0) { routePoints[i].legPath = null; continue; }
+    const from = routePoints[i - 1], to = routePoints[i];
+    const profile = ROUTE_PROFILE[to.ev.move];
+    let path = profile ? await fetchRoutePath(from.lat, from.lon, to.lat, to.lon, profile) : null;
+    if (!path || path.length < 2) path = [[from.lat, from.lon], [to.lat, to.lon]];
+    routePoints[i].legPath = path;
+  }
   routePoints.forEach((pt, i) => {
     const icon = L.divIcon({
       className: 'route-pin-wrap',
@@ -940,10 +989,12 @@ async function renderMapForSelectedDay() {
     m.bindTooltip(`${pt.ev.time ? pt.ev.time + ' ' : ''}${escapeHtml(pt.ev.name)}`, { permanent: true, direction: 'top', offset: [0, -26], className: 'route-pin-label' });
     m.on('click', () => { routeStepIndex = i; renderStepBar(); });
     pt.marker = m;
+    if (pt.legPath) {
+      routeLines.push(L.polyline(pt.legPath, { color: '#2b6cb0', weight: 3, dashArray: '6,6' }).addTo(map));
+    }
   });
   if (routePoints.length) {
     const latlngs = routePoints.map(p => [p.lat, p.lon]);
-    routeLine = L.polyline(latlngs, { color: '#2b6cb0', weight: 3, dashArray: '6,6' }).addTo(map);
     map.fitBounds(L.latLngBounds(latlngs), { padding: [40, 40] });
   } else {
     map.setView(SEOUL, 12);
@@ -987,15 +1038,15 @@ function renderStepBar() {
   if (routeStepIndex === -1) {
     bar.style.width = '0%';
     summary.innerHTML = `오늘 일정 ${n}개 · <span class="sub">다음을 눌러 시작해요</span>`;
-    lastActivePt = null;
     if (walkerMarker) walkerMarker.setOpacity(0);
+    lastRenderedStepIndex = routeStepIndex;
     return;
   }
   if (routeStepIndex >= n) {
     bar.style.width = '100%';
     summary.innerHTML = `🎉 오늘의 동선 끝! <span class="sub">즐거운 여행 되세요</span>`;
-    lastActivePt = null;
     if (walkerMarker) walkerMarker.setOpacity(0);
+    lastRenderedStepIndex = routeStepIndex;
     return;
   }
   bar.style.width = `${((routeStepIndex + 1) / n) * 100}%`;
@@ -1005,8 +1056,13 @@ function renderStepBar() {
   if (el) el.querySelector('.route-pin-outer')?.classList.add('active');
   pt.marker.getTooltip()?.getElement()?.classList.add('active');
   const duration = 0.6;
-  if (lastActivePt) animateWalker([lastActivePt.lat, lastActivePt.lon], [pt.lat, pt.lon], duration * 1000);
-  lastActivePt = { lat: pt.lat, lon: pt.lon };
+  const movingForward = lastRenderedStepIndex === routeStepIndex - 1;
+  if (movingForward && pt.legPath) {
+    animateWalker(pt.legPath, duration * 1000, MOVE_ICON[pt.ev.move] || '🚶');
+  } else if (walkerMarker) {
+    walkerMarker.setOpacity(0);
+  }
+  lastRenderedStepIndex = routeStepIndex;
   map.flyTo([pt.lat, pt.lon], Math.max(map.getZoom(), 15), { duration });
   pt.marker.openTooltip();
 }
