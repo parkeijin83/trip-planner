@@ -881,6 +881,30 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
+function greatCirclePath(lat1, lon1, lat2, lon2, numPoints = 64) {
+  const toRad = d => d * Math.PI / 180, toDeg = r => r * 180 / Math.PI;
+  const phi1 = toRad(lat1), lam1 = toRad(lon1), phi2 = toRad(lat2), lam2 = toRad(lon2);
+  const d = 2 * Math.asin(Math.sqrt(Math.sin((phi2 - phi1) / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin((lam2 - lam1) / 2) ** 2));
+  if (d === 0) return [[lat1, lon1]];
+  const points = [];
+  for (let i = 0; i <= numPoints; i++) {
+    const f = i / numPoints;
+    const A = Math.sin((1 - f) * d) / Math.sin(d);
+    const B = Math.sin(f * d) / Math.sin(d);
+    const x = A * Math.cos(phi1) * Math.cos(lam1) + B * Math.cos(phi2) * Math.cos(lam2);
+    const y = A * Math.cos(phi1) * Math.sin(lam1) + B * Math.cos(phi2) * Math.sin(lam2);
+    const z = A * Math.sin(phi1) + B * Math.sin(phi2);
+    const phii = Math.atan2(z, Math.sqrt(x * x + y * y));
+    const lami = Math.atan2(y, x);
+    points.push([toDeg(phii), toDeg(lami)]);
+  }
+  // unwrap longitude so the line doesn't jump across the antimeridian
+  for (let i = 1; i < points.length; i++) {
+    while (points[i][1] - points[i - 1][1] > 180) points[i][1] -= 360;
+    while (points[i][1] - points[i - 1][1] < -180) points[i][1] += 360;
+  }
+  return points;
+}
 function pathLengthKm(path) {
   let d = 0;
   for (let i = 1; i < path.length; i++) d += haversineKm(path[i - 1][0], path[i - 1][1], path[i][0], path[i][1]);
@@ -994,7 +1018,7 @@ async function renderMapForSelectedDay() {
     const from = routePoints[i - 1], to = routePoints[i];
     const profile = ROUTE_PROFILE[to.ev.move];
     let path = profile ? await fetchRoutePath(from.lat, from.lon, to.lat, to.lon, profile) : null;
-    if (!path || path.length < 2) path = [[from.lat, from.lon], [to.lat, to.lon]];
+    if (!path || path.length < 2) path = greatCirclePath(from.lat, from.lon, to.lat, to.lon);
     routePoints[i].legPath = path;
   }
   routePoints.forEach((pt, i) => {
@@ -1013,7 +1037,9 @@ async function renderMapForSelectedDay() {
     }
   });
   if (routePoints.length) {
-    const latlngs = routePoints.map(p => [p.lat, p.lon]);
+    // Use leg-path points (not just raw pin coords) so antimeridian-crossing routes fit tightly instead of the whole globe.
+    const latlngs = [[routePoints[0].lat, routePoints[0].lon]];
+    routePoints.forEach(p => { if (p.legPath) latlngs.push(...p.legPath); });
     map.fitBounds(L.latLngBounds(latlngs), { padding: [40, 40] });
   } else {
     map.setView(SEOUL, 12);
