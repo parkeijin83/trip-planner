@@ -1,0 +1,761 @@
+/* ---------- storage ---------- */
+const STORE_KEY = 'tp_data_v1';
+
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { console.error(e); }
+  return { trips: [], activeTripId: null, geocache: {} };
+}
+function saveData() { localStorage.setItem(STORE_KEY, JSON.stringify(DATA)); }
+
+let DATA = loadData();
+if (!DATA.geocache) DATA.geocache = {};
+
+/* ---------- state ---------- */
+let selectedDay = null;      // "YYYY-MM-DD"
+let editingEventId = null;   // null = new
+let editingFlightId = null;  // null = new
+let pendingAttachments = [];
+let map = null, markersLayer = null, routeLine = null, charMarker = null, animReq = null;
+const firedAlarms = new Set();
+
+/* ---------- utils ---------- */
+const $ = (id) => document.getElementById(id);
+const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+const DOW = ['일', '월', '화', '수', '목', '금', '토'];
+const TYPE_ICON = { '항공': '✈️', '숙소': '🏨', '식당': '🍽️', '이동': '🚗', '기타': '📝' };
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 1800);
+}
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function addDays(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function dayCount(trip) {
+  const a = new Date(trip.startDate + 'T00:00:00');
+  const b = new Date(trip.endDate + 'T00:00:00');
+  return Math.round((b - a) / 86400000) + 1;
+}
+function dayList(trip) {
+  const n = dayCount(trip);
+  const cities = (trip.cities && trip.cities.length) ? trip.cities : [];
+  const list = [];
+  for (let i = 0; i < n; i++) {
+    const date = addDays(trip.startDate, i);
+    const dow = DOW[new Date(date + 'T00:00:00').getDay()];
+    let city = '';
+    if (cities.length === 1) city = cities[0];
+    else if (cities.length > 1) city = cities[Math.min(i, cities.length - 1)];
+    list.push({ date, dow, city });
+  }
+  return list;
+}
+function fmtMD(dateStr) {
+  const [y, m, d] = dateStr.split('-');
+  return `${parseInt(m)}/${parseInt(d)}`;
+}
+function fmtTripDates(trip) {
+  const n = dayCount(trip);
+  const nights = n - 1;
+  return `${fmtMD(trip.startDate)} – ${fmtMD(trip.endDate)} · ${nights}박 ${n}일`;
+}
+
+function getActiveTrip() {
+  return DATA.trips.find(t => t.id === DATA.activeTripId) || null;
+}
+
+/* ---------- trip management ---------- */
+function renderTripSelect() {
+  const sel = $('tripSelect');
+  sel.innerHTML = '';
+  if (!DATA.trips.length) {
+    const opt = document.createElement('option');
+    opt.textContent = '여행 없음 · ＋ 눌러 만들기';
+    sel.appendChild(opt);
+    return;
+  }
+  DATA.trips.forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t.id;
+    opt.textContent = t.title;
+    if (t.id === DATA.activeTripId) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+$('tripSelect').addEventListener('change', (e) => {
+  DATA.activeTripId = e.target.value;
+  saveData();
+  onTripChanged();
+});
+
+$('btnNewTrip').addEventListener('click', () => {
+  $('tName').value = '';
+  $('tStart').value = '';
+  $('tEnd').value = '';
+  $('tNote').value = '';
+  $('tCities').value = '';
+  openModal('tripModal');
+});
+
+$('btnSaveTrip').addEventListener('click', () => {
+  const title = $('tName').value.trim();
+  const start = $('tStart').value;
+  const end = $('tEnd').value;
+  if (!title || !start || !end) { toast('제목과 날짜를 입력해주세요'); return; }
+  if (end < start) { toast('종료일이 시작일보다 빠를 수 없어요'); return; }
+  const trip = {
+    id: uid(),
+    title,
+    subtitle: $('tNote').value.trim(),
+    startDate: start,
+    endDate: end,
+    cities: $('tCities').value.split(',').map(s => s.trim()).filter(Boolean),
+    headerPhoto: null,
+    ended: false,
+    flights: [],
+    days: {}
+  };
+  DATA.trips.push(trip);
+  DATA.activeTripId = trip.id;
+  saveData();
+  closeModal('tripModal');
+  onTripChanged();
+  toast('여행이 생성되었어요');
+});
+
+$('btnToggleEnded').addEventListener('click', () => {
+  const trip = getActiveTrip();
+  if (!trip) return;
+  trip.ended = !trip.ended;
+  saveData();
+  renderHeader();
+});
+
+/* ---------- header ---------- */
+function renderHeader() {
+  const trip = getActiveTrip();
+  const header = $('tripHeader');
+  if (!trip) {
+    $('tripTitle').textContent = '여행을 선택하거나 새로 만들어보세요';
+    $('tripDates').textContent = '';
+    header.style.backgroundImage = '';
+    return;
+  }
+  $('tripTitle').textContent = trip.title;
+  $('tripDates').textContent = fmtTripDates(trip) + (trip.subtitle ? ' · ' + trip.subtitle : '');
+  const btn = $('btnToggleEnded');
+  btn.textContent = trip.ended ? '🏁 여행 종료' : '✈️ 여행 중';
+  btn.classList.toggle('ended', trip.ended);
+  if (trip.headerPhoto) {
+    header.style.backgroundImage = `linear-gradient(rgba(20,20,30,.35),rgba(20,20,30,.35)), url(${trip.headerPhoto})`;
+    header.style.backgroundSize = 'cover';
+    header.style.backgroundPosition = 'center';
+  } else {
+    header.style.backgroundImage = '';
+  }
+}
+
+/* ---------- tabs ---------- */
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    $('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'overview') {
+      setTimeout(() => { if (map) map.invalidateSize(); renderMapForSelectedDay(); }, 50);
+    }
+  });
+});
+
+/* ---------- flights ---------- */
+function renderFlights() {
+  const trip = getActiveTrip();
+  const list = $('flightList');
+  list.innerHTML = '';
+  if (!trip || !trip.flights.length) {
+    list.innerHTML = '<p class="empty-note">등록된 항공편이 없어요</p>';
+    return;
+  }
+  trip.flights.slice().sort((a, b) => (a.dep || '').localeCompare(b.dep || '')).forEach(fl => {
+    const div = document.createElement('div');
+    div.className = 'flight-card';
+    div.innerHTML = `
+      <div class="flight-tag">${escapeHtml(fl.tag || '항공편')} ${fl.no ? '· ' + escapeHtml(fl.no) : ''}</div>
+      <div class="flight-route">
+        <span>${escapeHtml(fl.fromCode || '?')}</span><span>✈️</span><span>${escapeHtml(fl.toCode || '?')}</span>
+      </div>
+      <div class="flight-meta">${escapeHtml(fl.fromCity || '')} ${fmtDT(fl.dep)} → ${escapeHtml(fl.toCity || '')} ${fmtDT(fl.arr)}</div>
+      ${fl.note ? `<div class="flight-meta">📌 ${escapeHtml(fl.note)}</div>` : ''}
+    `;
+    div.addEventListener('click', () => openFlightModal(fl.id));
+    list.appendChild(div);
+  });
+}
+function fmtDT(v) {
+  if (!v) return '';
+  const [d, t] = v.split('T');
+  if (!d) return v;
+  return fmtMD(d) + ' ' + (t || '');
+}
+
+$('btnAddFlight').addEventListener('click', () => openFlightModal(null));
+
+function openFlightModal(id) {
+  const trip = getActiveTrip();
+  if (!trip) { toast('먼저 여행을 만들어주세요'); return; }
+  editingFlightId = id;
+  const fl = id ? trip.flights.find(f => f.id === id) : null;
+  $('flTag').value = fl?.tag || '';
+  $('flNo').value = fl?.no || '';
+  $('flFromCode').value = fl?.fromCode || '';
+  $('flToCode').value = fl?.toCode || '';
+  $('flFromCity').value = fl?.fromCity || '';
+  $('flToCity').value = fl?.toCity || '';
+  $('flDep').value = fl?.dep || '';
+  $('flArr').value = fl?.arr || '';
+  $('flNote').value = fl?.note || '';
+  $('btnDeleteFlight').style.display = id ? '' : 'none';
+  openModal('flightModal');
+}
+$('btnSaveFlight').addEventListener('click', () => {
+  const trip = getActiveTrip();
+  if (!trip) return;
+  const data = {
+    tag: $('flTag').value.trim(),
+    no: $('flNo').value.trim(),
+    fromCode: $('flFromCode').value.trim().toUpperCase(),
+    toCode: $('flToCode').value.trim().toUpperCase(),
+    fromCity: $('flFromCity').value.trim(),
+    toCity: $('flToCity').value.trim(),
+    dep: $('flDep').value,
+    arr: $('flArr').value,
+    note: $('flNote').value.trim()
+  };
+  if (!data.dep) { toast('출발 날짜·시간을 입력해주세요'); return; }
+  if (editingFlightId) {
+    Object.assign(trip.flights.find(f => f.id === editingFlightId), data);
+  } else {
+    trip.flights.push({ id: uid(), ...data });
+  }
+  saveData();
+  closeModal('flightModal');
+  renderFlights();
+});
+$('btnDeleteFlight').addEventListener('click', () => {
+  const trip = getActiveTrip();
+  if (!trip || !editingFlightId) return;
+  trip.flights = trip.flights.filter(f => f.id !== editingFlightId);
+  saveData();
+  closeModal('flightModal');
+  renderFlights();
+});
+
+/* ---------- documents (aggregated attachments) ---------- */
+function renderDocs() {
+  const trip = getActiveTrip();
+  const list = $('docList');
+  list.innerHTML = '';
+  if (!trip) { list.innerHTML = '<p class="empty-note">여행을 먼저 만들어주세요</p>'; return; }
+  const docs = [];
+  Object.keys(trip.days).forEach(date => {
+    trip.days[date].forEach(ev => {
+      (ev.attachments || []).forEach(a => docs.push({ ...a, date, evName: ev.name }));
+    });
+  });
+  if (!docs.length) { list.innerHTML = '<p class="empty-note">아직 첨부된 서류가 없어요</p>'; return; }
+  docs.forEach(d => {
+    const a = document.createElement('a');
+    a.className = 'doc-item';
+    a.href = d.dataUrl;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.innerHTML = `<span>${d.name && d.name.toLowerCase().includes('.pdf') ? '📄' : '🖼️'}</span>
+      <span class="doc-name">${escapeHtml(d.name)} <span class="hint">· ${fmtMD(d.date)} ${escapeHtml(d.evName || '')}</span></span>
+      <span class="doc-open">열기 ›</span>`;
+    list.appendChild(a);
+  });
+}
+
+/* ---------- day tabs + schedule ---------- */
+function ensureSelectedDay(trip) {
+  const days = dayList(trip);
+  if (!days.length) { selectedDay = null; return; }
+  const t = todayStr();
+  if (days.some(d => d.date === selectedDay)) return;
+  const inRange = days.find(d => d.date === t);
+  selectedDay = inRange ? inRange.date : days[0].date;
+}
+
+function renderDayTabs() {
+  const trip = getActiveTrip();
+  const wrap = $('dayTabs');
+  wrap.innerHTML = '';
+  if (!trip) return;
+  dayList(trip).forEach(d => {
+    const el = document.createElement('div');
+    el.className = 'day-tab' + (d.date === selectedDay ? ' active' : '');
+    el.innerHTML = `<div class="dow">${d.dow}</div><div class="dnum">${fmtMD(d.date)}</div>${d.city ? `<div class="dcity">${escapeHtml(d.city)}</div>` : ''}`;
+    el.addEventListener('click', () => {
+      selectedDay = d.date;
+      renderDayTabs();
+      renderEvents();
+      if ($('tab-overview').classList.contains('active')) renderMapForSelectedDay();
+    });
+    wrap.appendChild(el);
+  });
+}
+
+function currencyTotals(events) {
+  const totals = {};
+  events.forEach(ev => {
+    if (ev.amount) {
+      const cur = ev.currency || '원';
+      totals[cur] = (totals[cur] || 0) + Number(ev.amount);
+    }
+  });
+  return totals;
+}
+
+function renderEvents() {
+  const trip = getActiveTrip();
+  const list = $('eventList');
+  list.innerHTML = '';
+  if (!trip || !selectedDay) {
+    $('dayTotal').textContent = '';
+    return;
+  }
+  const events = (trip.days[selectedDay] || []).slice().sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+
+  const totals = currencyTotals(events);
+  const totalStr = Object.keys(totals).map(cur => `${totals[cur].toLocaleString()}${cur}`).join(' · ');
+  $('dayTotal').innerHTML = totalStr ? `오늘 지출 합계 <b>${totalStr}</b>` : '';
+
+  if (!events.length) {
+    list.innerHTML = '<p class="empty-note">이 날은 아직 일정이 없어요</p>';
+    return;
+  }
+  events.forEach(ev => {
+    const div = document.createElement('div');
+    div.className = 'event-card';
+    div.innerHTML = `
+      <div class="event-top">
+        <span class="event-time">${ev.time ? escapeHtml(ev.time) : '--:--'}</span>
+        <span class="event-type">${TYPE_ICON[ev.type] || '📝'} ${escapeHtml(ev.type)}${ev.move ? ' · 🚶 ' + escapeHtml(ev.move) : ''}${ev.alarm ? ' · 🔔 ' + escapeHtml(ev.alarm) : ''}</span>
+      </div>
+      <div class="event-name">${escapeHtml(ev.name)}</div>
+      ${ev.note ? `<div class="event-note">${escapeHtml(ev.note)}</div>` : ''}
+      ${ev.amount ? `<div class="event-amount">💰 ${Number(ev.amount).toLocaleString()}${escapeHtml(ev.currency || '원')}</div>` : ''}
+      ${(ev.attachments && ev.attachments.length) ? `<div class="event-attach">${ev.attachments.map(a => `<a class="attach-chip" target="_blank" rel="noopener" href="${a.dataUrl}">📎 ${escapeHtml(a.name)}</a>`).join('')}</div>` : ''}
+      <div class="event-actions">
+        <button class="goto">🧭 길찾기</button>
+        <button class="map">📍 지도보기</button>
+        <button class="cal">📅 캘린더</button>
+        <button class="edit">✏️ 편집</button>
+        <button class="del">🗑 삭제</button>
+      </div>
+    `;
+    div.querySelector('.goto').addEventListener('click', () => openDirections(ev));
+    div.querySelector('.map').addEventListener('click', () => focusEventOnMap(ev));
+    div.querySelector('.cal').addEventListener('click', () => downloadIcsForEvent(ev));
+    div.querySelector('.edit').addEventListener('click', () => openEventModal(ev.id));
+    div.querySelector('.del').addEventListener('click', () => deleteEvent(ev.id));
+    list.appendChild(div);
+  });
+}
+
+function openDirections(ev) {
+  if (ev.mapUrl) { window.open(ev.mapUrl, '_blank'); return; }
+  const q = ev.place || ev.name;
+  window.open('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q), '_blank');
+}
+
+function deleteEvent(id) {
+  const trip = getActiveTrip();
+  if (!trip || !selectedDay) return;
+  if (!confirm('이 일정을 삭제할까요?')) return;
+  trip.days[selectedDay] = (trip.days[selectedDay] || []).filter(e => e.id !== id);
+  saveData();
+  renderEvents();
+  renderDocs();
+}
+
+$('btnAddEvent').addEventListener('click', () => {
+  if (!getActiveTrip()) { toast('먼저 여행을 만들어주세요'); return; }
+  if (!selectedDay) { toast('날짜를 선택해주세요'); return; }
+  openEventModal(null);
+});
+
+function openEventModal(id) {
+  const trip = getActiveTrip();
+  editingEventId = id;
+  const ev = id ? (trip.days[selectedDay] || []).find(e => e.id === id) : null;
+  $('eventModalTitle').textContent = id ? '일정 편집' : '일정 추가';
+  $('fType').value = ev?.type || '기타';
+  $('fTime').value = ev?.time || '';
+  $('fName').value = ev?.name || '';
+  $('fPlace').value = ev?.place || '';
+  $('fMapUrl').value = ev?.mapUrl || '';
+  $('fMove').value = ev?.move || '';
+  $('fAmount').value = ev?.amount ?? '';
+  $('fCurrency').value = ev?.currency || '원';
+  $('fAlarm').value = ev?.alarm || '';
+  $('fNote').value = ev?.note || '';
+  pendingAttachments = ev?.attachments ? ev.attachments.slice() : [];
+  renderAttachPreview();
+  $('attachInput').value = '';
+  $('btnDeleteEvent').style.display = id ? '' : 'none';
+  openModal('eventModal');
+}
+
+function renderAttachPreview() {
+  const wrap = $('attachPreview');
+  wrap.innerHTML = '';
+  pendingAttachments.forEach(a => {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.innerHTML = `📎 ${escapeHtml(a.name)} <button type="button">✕</button>`;
+    chip.querySelector('button').addEventListener('click', () => {
+      pendingAttachments = pendingAttachments.filter(x => x.id !== a.id);
+      renderAttachPreview();
+    });
+    wrap.appendChild(chip);
+  });
+}
+
+$('attachInput').addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files || []);
+  for (const f of files) {
+    if (f.size > 4 * 1024 * 1024) { toast(`${f.name}이(가) 너무 커요 (4MB 이하 권장)`); continue; }
+    const dataUrl = await fileToDataUrl(f);
+    pendingAttachments.push({ id: uid(), name: f.name, dataUrl });
+  }
+  renderAttachPreview();
+});
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+$('btnClearAlarm').addEventListener('click', () => { $('fAlarm').value = ''; });
+
+$('btnSaveEvent').addEventListener('click', () => {
+  const trip = getActiveTrip();
+  if (!trip || !selectedDay) return;
+  const name = $('fName').value.trim();
+  if (!name) { toast('이름을 입력해주세요'); return; }
+  const data = {
+    type: $('fType').value,
+    time: $('fTime').value,
+    name,
+    place: $('fPlace').value.trim(),
+    mapUrl: $('fMapUrl').value.trim(),
+    move: $('fMove').value.trim(),
+    amount: $('fAmount').value ? Number($('fAmount').value) : null,
+    currency: $('fCurrency').value,
+    alarm: $('fAlarm').value || null,
+    note: $('fNote').value.trim(),
+    attachments: pendingAttachments
+  };
+  if (!trip.days[selectedDay]) trip.days[selectedDay] = [];
+  if (editingEventId) {
+    Object.assign(trip.days[selectedDay].find(e => e.id === editingEventId), data);
+  } else {
+    trip.days[selectedDay].push({ id: uid(), ...data });
+  }
+  saveData();
+  closeModal('eventModal');
+  renderEvents();
+  renderDocs();
+});
+$('btnDeleteEvent').addEventListener('click', () => {
+  if (!editingEventId) return;
+  closeModal('eventModal');
+  deleteEvent(editingEventId);
+});
+
+/* ---------- modals ---------- */
+function openModal(id) { $(id).classList.add('open'); }
+function closeModal(id) { $(id).classList.remove('open'); }
+document.querySelectorAll('[data-close]').forEach(btn => {
+  btn.addEventListener('click', () => closeModal(btn.dataset.close));
+});
+document.querySelectorAll('.modal-backdrop').forEach(bd => {
+  bd.addEventListener('click', (e) => { if (e.target === bd) bd.classList.remove('open'); });
+});
+
+/* ---------- settings ---------- */
+$('btnSettings').addEventListener('click', () => {
+  const trip = getActiveTrip();
+  $('sTitle').value = trip ? trip.title : '';
+  openModal('settingsModal');
+});
+$('btnSaveTitle').addEventListener('click', () => {
+  const trip = getActiveTrip();
+  if (!trip) return;
+  const v = $('sTitle').value.trim();
+  if (!v) return;
+  trip.title = v;
+  saveData();
+  renderHeader();
+  renderTripSelect();
+  toast('제목이 저장되었어요');
+});
+$('sHeaderPhoto').addEventListener('change', async (e) => {
+  const trip = getActiveTrip();
+  const f = e.target.files[0];
+  if (!trip || !f) return;
+  trip.headerPhoto = await fileToDataUrl(f);
+  saveData();
+  renderHeader();
+});
+$('btnResetPhoto').addEventListener('click', () => {
+  const trip = getActiveTrip();
+  if (!trip) return;
+  trip.headerPhoto = null;
+  saveData();
+  renderHeader();
+});
+$('btnNotifPerm').addEventListener('click', async () => {
+  if (!('Notification' in window)) { toast('이 브라우저는 알림을 지원하지 않아요'); return; }
+  const p = await Notification.requestPermission();
+  toast(p === 'granted' ? '알림이 허용되었어요' : '알림이 거부되었어요');
+});
+$('btnExport').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(DATA, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `trip-planner-backup-${todayStr()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+$('btnImport').addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const parsed = JSON.parse(r.result);
+      if (!parsed.trips) throw new Error('invalid');
+      DATA = parsed;
+      if (!DATA.geocache) DATA.geocache = {};
+      saveData();
+      onTripChanged();
+      closeModal('settingsModal');
+      toast('불러오기 완료');
+    } catch (err) {
+      toast('파일을 읽을 수 없어요');
+    }
+  };
+  r.readAsText(f);
+});
+$('btnResetAll').addEventListener('click', () => {
+  if (!confirm('정말 모든 데이터를 삭제할까요? 되돌릴 수 없어요.')) return;
+  DATA = { trips: [], activeTripId: null, geocache: {} };
+  saveData();
+  onTripChanged();
+  closeModal('settingsModal');
+});
+
+/* ---------- ICS export ---------- */
+function pad(n) { return String(n).padStart(2, '0'); }
+function icsDT(dateStr, timeStr) {
+  const [y, m, d] = dateStr.split('-');
+  const [hh, mm] = (timeStr || '00:00').split(':');
+  return `${y}${m}${d}T${pad(hh)}${pad(mm)}00`;
+}
+function icsEscape(s) { return String(s || '').replace(/([,;])/g, '\\$1').replace(/\n/g, '\\n'); }
+function buildIcsEvent(date, ev) {
+  const dtStart = icsDT(date, ev.time || '09:00');
+  return [
+    'BEGIN:VEVENT',
+    `UID:${ev.id}@trip-planner`,
+    `DTSTAMP:${icsDT(todayStr(), '00:00')}`,
+    `DTSTART:${dtStart}`,
+    `SUMMARY:${icsEscape((TYPE_ICON[ev.type] || '') + ' ' + ev.name)}`,
+    ev.place ? `LOCATION:${icsEscape(ev.place)}` : '',
+    ev.note ? `DESCRIPTION:${icsEscape(ev.note)}` : '',
+    ev.alarm ? ['BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:일정 알림', 'TRIGGER:PT0M', 'END:VALARM'].join('\n') : '',
+    'END:VEVENT'
+  ].filter(Boolean).join('\n');
+}
+function downloadIcs(filename, veventsText) {
+  const body = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//trip-planner//KR', veventsText, 'END:VCALENDAR'].join('\n');
+  const blob = new Blob([body], { type: 'text/calendar' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+function downloadIcsForEvent(ev) {
+  downloadIcs(`${ev.name}.ics`, buildIcsEvent(selectedDay, ev));
+}
+$('btnExportIcs').addEventListener('click', () => {
+  const trip = getActiveTrip();
+  if (!trip) return;
+  const chunks = [];
+  Object.keys(trip.days).forEach(date => {
+    trip.days[date].forEach(ev => { if (ev.alarm) chunks.push(buildIcsEvent(date, ev)); });
+  });
+  if (!chunks.length) { toast('알람이 설정된 일정이 없어요'); return; }
+  downloadIcs(`${trip.title}-alarms.ics`, chunks.join('\n'));
+  toast('캘린더 파일을 내보냈어요');
+});
+
+/* ---------- alarm checker (while app is open) ---------- */
+setInterval(() => {
+  const trip = getActiveTrip();
+  if (!trip) return;
+  const now = new Date();
+  const date = todayStr();
+  const hhmm = pad(now.getHours()) + ':' + pad(now.getMinutes());
+  (trip.days[date] || []).forEach(ev => {
+    if (ev.alarm === hhmm) {
+      const key = ev.id + hhmm;
+      if (firedAlarms.has(key)) return;
+      firedAlarms.add(key);
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('🔔 ' + ev.name, { body: ev.place || ev.note || '일정 시간이에요' });
+      } else {
+        toast(`🔔 ${ev.name} 시간이에요`);
+      }
+    }
+  });
+}, 20000);
+
+/* ---------- map / overview ---------- */
+async function geocode(query) {
+  if (!query) return null;
+  if (DATA.geocache[query]) return DATA.geocache[query];
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`);
+    const arr = await res.json();
+    if (arr && arr[0]) {
+      const p = { lat: parseFloat(arr[0].lat), lon: parseFloat(arr[0].lon) };
+      DATA.geocache[query] = p;
+      saveData();
+      return p;
+    }
+  } catch (e) { console.error('geocode failed', e); }
+  return null;
+}
+
+function initMap() {
+  if (map) return;
+  map = L.map('map').setView([38.7, -9.14], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19
+  }).addTo(map);
+  markersLayer = L.layerGroup().addTo(map);
+}
+
+async function renderMapForSelectedDay() {
+  const trip = getActiveTrip();
+  initMap();
+  markersLayer.clearLayers();
+  if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+  stopRouteAnimation();
+  if (!trip || !selectedDay) return;
+  const events = (trip.days[selectedDay] || []).slice().sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+  const pts = [];
+  for (const ev of events) {
+    const q = ev.place || ev.name;
+    const p = await geocode(q);
+    if (p) {
+      pts.push({ ev, ...p });
+      const m = L.marker([p.lat, p.lon]).addTo(markersLayer);
+      m.bindPopup(`<b>${escapeHtml(ev.time || '')} ${escapeHtml(ev.name)}</b>`);
+      m.on('click', () => { openEventModal(ev.id); });
+    }
+  }
+  if (pts.length) {
+    const latlngs = pts.map(p => [p.lat, p.lon]);
+    routeLine = L.polyline(latlngs, { color: '#2b6cb0', weight: 3, dashArray: '6,6' }).addTo(map);
+    map.fitBounds(L.latLngBounds(latlngs), { padding: [30, 30] });
+  } else {
+    map.setView([38.7, -9.14], 5);
+  }
+}
+
+function focusEventOnMap(ev) {
+  document.querySelector('.tab-btn[data-tab="overview"]').click();
+  setTimeout(async () => {
+    const q = ev.place || ev.name;
+    const p = await geocode(q);
+    if (p && map) { map.setView([p.lat, p.lon], 16); }
+    else toast('지도 위치를 찾을 수 없어요');
+  }, 150);
+}
+
+$('btnPlayRoute').addEventListener('click', () => {
+  if (!routeLine) { toast('표시할 동선이 없어요'); return; }
+  animateRoute();
+});
+function stopRouteAnimation() {
+  if (animReq) cancelAnimationFrame(animReq);
+  animReq = null;
+  if (charMarker) { map.removeLayer(charMarker); charMarker = null; }
+}
+function animateRoute() {
+  stopRouteAnimation();
+  const latlngs = routeLine.getLatLngs();
+  if (latlngs.length < 2) { toast('동선이 너무 짧아요'); return; }
+  const icon = L.divIcon({ className: 'leaflet-marker-char', html: '🚶', iconSize: [26, 26] });
+  charMarker = L.marker(latlngs[0], { icon }).addTo(map);
+  const segMs = 1200;
+  const totalMs = segMs * (latlngs.length - 1);
+  const start = performance.now();
+  function step(now) {
+    const elapsed = now - start;
+    const t = Math.min(elapsed / totalMs, 1);
+    const segF = t * (latlngs.length - 1);
+    const i = Math.min(Math.floor(segF), latlngs.length - 2);
+    const localT = segF - i;
+    const a = latlngs[i], b = latlngs[i + 1];
+    const lat = a.lat + (b.lat - a.lat) * localT;
+    const lng = a.lng + (b.lng - a.lng) * localT;
+    charMarker.setLatLng([lat, lng]);
+    if (t < 1) { animReq = requestAnimationFrame(step); }
+  }
+  animReq = requestAnimationFrame(step);
+}
+
+/* ---------- trip change ---------- */
+function onTripChanged() {
+  renderTripSelect();
+  const trip = getActiveTrip();
+  if (trip) ensureSelectedDay(trip); else selectedDay = null;
+  renderHeader();
+  renderFlights();
+  renderDocs();
+  renderDayTabs();
+  renderEvents();
+  if ($('tab-overview').classList.contains('active')) renderMapForSelectedDay();
+}
+
+/* ---------- init ---------- */
+(function init() {
+  if (!DATA.activeTripId && DATA.trips.length) DATA.activeTripId = DATA.trips[0].id;
+  onTripChanged();
+})();

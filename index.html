@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>내 여행 플래너</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">🧳 내 여행 플래너</div>
+  <div class="trip-switch">
+    <select id="tripSelect"></select>
+    <button id="btnNewTrip" class="icon-btn" title="새 여행 만들기">＋</button>
+  </div>
+  <button id="btnSettings" class="icon-btn" title="설정">⚙️</button>
+</header>
+
+<div id="tripHeader" class="trip-header">
+  <div class="trip-header-inner">
+    <h1 id="tripTitle">여행을 선택하거나 새로 만들어보세요</h1>
+    <p id="tripDates" class="trip-dates"></p>
+    <button id="btnToggleEnded" class="pill-btn">✈️ 여행 중</button>
+  </div>
+</div>
+
+<nav class="tabbar">
+  <button class="tab-btn active" data-tab="overview">🗺️ 오버뷰</button>
+  <button class="tab-btn" data-tab="schedule">📋 일정</button>
+</nav>
+
+<main id="app">
+
+  <section id="tab-overview" class="tab-panel active">
+    <div class="section-block">
+      <div class="section-title-row">
+        <h2>✈️ 항공편</h2>
+        <button id="btnAddFlight" class="link-btn">＋ 항공편 추가</button>
+      </div>
+      <div id="flightList" class="flight-list"></div>
+    </div>
+
+    <div class="section-block">
+      <h2>📎 예약 서류</h2>
+      <p class="hint">탭하면 바로 열려요 · 일정 편집 → 📎 파일 추가로 넣으면 여기에 모여요</p>
+      <div id="docList" class="doc-list"></div>
+    </div>
+
+    <div class="section-block">
+      <div class="section-title-row">
+        <h2>🗺️ 오늘의 동선</h2>
+        <button id="btnPlayRoute" class="link-btn">▶ 동선 보기</button>
+      </div>
+      <div id="map"></div>
+      <p class="hint">핀을 누르면 해당 일정으로 이동해요</p>
+    </div>
+  </section>
+
+  <section id="tab-schedule" class="tab-panel">
+    <div id="dayTabs" class="day-tabs"></div>
+    <div id="dayTotal" class="day-total"></div>
+    <div id="eventList" class="event-list"></div>
+    <button id="btnAddEvent" class="add-event-btn">＋ 이 날에 일정 추가</button>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <p>내 전용 여행 플래너 · 데이터는 이 기기에만 저장돼요</p>
+</footer>
+
+<!-- Event Modal -->
+<div id="eventModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="eventModalTitle">일정 추가</h3>
+      <button class="modal-close" data-close="eventModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <label>종류
+        <select id="fType">
+          <option value="항공">✈️ 항공</option>
+          <option value="숙소">🏨 숙소</option>
+          <option value="식당">🍽️ 식당</option>
+          <option value="이동">🚗 이동</option>
+          <option value="기타" selected>📝 기타</option>
+        </select>
+      </label>
+      <label>시간
+        <input type="time" id="fTime">
+      </label>
+      <label>이름 *
+        <input type="text" id="fName" placeholder="예: 타임아웃 마켓, 동 루이스 다리">
+      </label>
+      <label>지도 검색어 / 주소 (길찾기용)
+        <input type="text" id="fPlace" placeholder="비워두면 위 이름으로 검색해요">
+      </label>
+      <label>구글 지도 링크 직접 넣기 (선택)
+        <input type="text" id="fMapUrl" placeholder="https://maps.app.goo.gl/... 붙여넣기">
+      </label>
+      <label>🚶 이동 방법 (선택)
+        <input type="text" id="fMove" placeholder="예: 도보 / 지하철 / 택시">
+      </label>
+      <div class="field-row">
+        <label>💰 금액 (선택)
+          <input type="number" id="fAmount" placeholder="0" min="0" step="1">
+        </label>
+        <label>통화
+          <select id="fCurrency">
+            <option value="원">원</option>
+            <option value="€">€ 유로</option>
+            <option value="$">$ 달러</option>
+            <option value="£">£ 파운드</option>
+            <option value="¥">¥ 엔</option>
+            <option value="기타">기타</option>
+          </select>
+        </label>
+      </div>
+      <label>📎 파일 첨부 (선택)
+        <input type="file" id="attachInput" accept="application/pdf,image/*" multiple>
+      </label>
+      <div id="attachPreview" class="attach-preview"></div>
+      <p class="hint">예약 확인서·바우처를 첨부하면 이 일정에서 바로 열 수 있어요. (파일당 2MB 이하 권장)</p>
+      <label>🔔 알람 (선택)
+        <div class="row-gap">
+          <input type="time" id="fAlarm">
+          <button type="button" id="btnClearAlarm" class="link-btn">지우기</button>
+        </div>
+      </label>
+      <p class="hint">앱이 열려 있을 때 알림이 울려요. 확실하게 하려면 저장 후 📅 캘린더 버튼으로 폰 캘린더에 넣으세요.</p>
+      <label>메모 (선택)
+        <textarea id="fNote" rows="2"></textarea>
+      </label>
+    </div>
+    <div class="modal-foot">
+      <button id="btnDeleteEvent" class="danger-btn">삭제</button>
+      <div class="spacer"></div>
+      <button class="ghost-btn" data-close="eventModal">취소</button>
+      <button id="btnSaveEvent" class="primary-btn">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- Flight Modal -->
+<div id="flightModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>항공편 편집</h3>
+      <button class="modal-close" data-close="flightModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <label>구분
+        <input type="text" id="flTag" placeholder="출발 / 귀국">
+      </label>
+      <label>편명 (선택)
+        <input type="text" id="flNo" placeholder="예: KE921">
+      </label>
+      <div class="field-row">
+        <label>출발 공항코드
+          <input type="text" id="flFromCode" placeholder="ICN">
+        </label>
+        <label>도착 공항코드
+          <input type="text" id="flToCode" placeholder="LIS">
+        </label>
+      </div>
+      <div class="field-row">
+        <label>출발 도시
+          <input type="text" id="flFromCity" placeholder="인천">
+        </label>
+        <label>도착 도시
+          <input type="text" id="flToCity" placeholder="리스본">
+        </label>
+      </div>
+      <label>출발 (날짜·시간)
+        <input type="datetime-local" id="flDep">
+      </label>
+      <label>도착 (날짜·시간)
+        <input type="datetime-local" id="flArr">
+      </label>
+      <label>메모 (선택)
+        <input type="text" id="flNote" placeholder="경유, 터미널, 좌석 등">
+      </label>
+    </div>
+    <div class="modal-foot">
+      <button id="btnDeleteFlight" class="danger-btn">삭제</button>
+      <div class="spacer"></div>
+      <button class="ghost-btn" data-close="flightModal">취소</button>
+      <button id="btnSaveFlight" class="primary-btn">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- New Trip Modal -->
+<div id="tripModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>새 여행 만들기</h3>
+      <button class="modal-close" data-close="tripModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <label>여행 제목 *
+        <input type="text" id="tName" placeholder="예: 도쿄 벚꽃 여행">
+      </label>
+      <div class="field-row">
+        <label>시작일 *
+          <input type="date" id="tStart">
+        </label>
+        <label>종료일 *
+          <input type="date" id="tEnd">
+        </label>
+      </div>
+      <label>부제 (선택)
+        <input type="text" id="tNote" placeholder="예: 2인 · 자유여행">
+      </label>
+      <label>도시/지역 (선택)
+        <input type="text" id="tCities" placeholder="예: 도쿄, 도쿄, 하코네, 도쿄">
+        <span class="hint">날짜 순서대로 쉼표로 구분하면 날짜 탭에 표시돼요. 하나만 쓰면 전체 적용.</span>
+      </label>
+    </div>
+    <div class="modal-foot">
+      <div class="spacer"></div>
+      <button class="ghost-btn" data-close="tripModal">취소</button>
+      <button id="btnSaveTrip" class="primary-btn">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div id="settingsModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>백업 &amp; 설정</h3>
+      <button class="modal-close" data-close="settingsModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <label>여행 제목
+        <input type="text" id="sTitle">
+      </label>
+      <button id="btnSaveTitle" class="ghost-btn">제목 저장</button>
+
+      <hr>
+      <p class="modal-section-label">헤더 사진</p>
+      <label class="file-label">📷 사진 변경
+        <input type="file" id="sHeaderPhoto" accept="image/*" style="display:none">
+      </label>
+      <button id="btnResetPhoto" class="ghost-btn">기본 이미지로</button>
+
+      <hr>
+      <p class="modal-section-label">알림 권한</p>
+      <button id="btnNotifPerm" class="ghost-btn">🔔 알림 허용하기</button>
+
+      <hr>
+      <p class="modal-section-label">데이터 백업</p>
+      <div class="row-gap">
+        <button id="btnExport" class="ghost-btn">📤 내보내기</button>
+        <label class="file-label ghost-btn">📥 불러오기
+          <input type="file" id="btnImport" accept="application/json" style="display:none">
+        </label>
+      </div>
+      <button id="btnExportIcs" class="ghost-btn">📅 알람 있는 일정 전체 캘린더로 내보내기</button>
+
+      <hr>
+      <button id="btnResetAll" class="danger-btn">전체 초기화</button>
+    </div>
+    <div class="modal-foot">
+      <div class="spacer"></div>
+      <button class="ghost-btn" data-close="settingsModal">닫기</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
