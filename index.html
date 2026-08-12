@@ -53,6 +53,7 @@
         <h2>🗺️ 오늘의 동선</h2>
         <button id="btnPlayRoute" class="link-btn">▶ 동선 보기</button>
       </div>
+      <div id="dayTabsOverview" class="day-tabs"></div>
       <div id="map"></div>
       <p class="hint">핀을 누르면 해당 일정으로 이동해요</p>
     </div>
@@ -89,7 +90,11 @@
         </select>
       </label>
       <label>시간
-        <input type="time" id="fTime">
+        <div class="time-select-row">
+          <select id="fTimeH"></select>
+          <span>:</span>
+          <select id="fTimeM"></select>
+        </div>
       </label>
       <label>이름 *
         <input type="text" id="fName" placeholder="예: 타임아웃 마켓, 동 루이스 다리">
@@ -125,7 +130,11 @@
       <p class="hint">예약 확인서·바우처를 첨부하면 이 일정에서 바로 열 수 있어요. (파일당 2MB 이하 권장)</p>
       <label>🔔 알람 (선택)
         <div class="row-gap">
-          <input type="time" id="fAlarm">
+          <div class="time-select-row">
+            <select id="fAlarmH"></select>
+            <span>:</span>
+            <select id="fAlarmM"></select>
+          </div>
           <button type="button" id="btnClearAlarm" class="link-btn">지우기</button>
         </div>
       </label>
@@ -152,17 +161,20 @@
     </div>
     <div class="modal-body">
       <label>구분
-        <input type="text" id="flTag" placeholder="출발 / 귀국">
+        <select id="flTag">
+          <option value="출발">출발</option>
+          <option value="귀국">귀국</option>
+        </select>
       </label>
       <label>편명 (선택)
         <input type="text" id="flNo" placeholder="예: KE921">
       </label>
       <div class="field-row">
         <label>출발 공항코드
-          <input type="text" id="flFromCode" placeholder="ICN">
+          <input type="text" id="flFromCode" placeholder="ICN" maxlength="4">
         </label>
         <label>도착 공항코드
-          <input type="text" id="flToCode" placeholder="LIS">
+          <input type="text" id="flToCode" placeholder="LIS" maxlength="4">
         </label>
       </div>
       <div class="field-row">
@@ -174,10 +186,20 @@
         </label>
       </div>
       <label>출발 (날짜·시간)
-        <input type="datetime-local" id="flDep">
+        <div class="time-select-row">
+          <input type="date" id="flDepDate">
+          <select id="flDepH"></select>
+          <span>:</span>
+          <select id="flDepM"></select>
+        </div>
       </label>
       <label>도착 (날짜·시간)
-        <input type="datetime-local" id="flArr">
+        <div class="time-select-row">
+          <input type="date" id="flArrDate">
+          <select id="flArrH"></select>
+          <span>:</span>
+          <select id="flArrM"></select>
+        </div>
       </label>
       <label>메모 (선택)
         <input type="text" id="flNote" placeholder="경유, 터미널, 좌석 등">

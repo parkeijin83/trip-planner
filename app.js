@@ -30,6 +30,22 @@ const TYPE_ICON = { '항공': '✈️', '숙소': '🏨', '식당': '🍽️', '
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+function pad(n) { return String(n).padStart(2, '0'); }
+const SEOUL = [37.5665, 126.9780];
+
+function populateTimeSelect(hSel, mSel) {
+  hSel.innerHTML = '<option value="">--</option>' + Array.from({ length: 24 }, (_, h) => `<option value="${pad(h)}">${pad(h)}</option>`).join('');
+  mSel.innerHTML = '<option value="">--</option>' + Array.from({ length: 12 }, (_, i) => pad(i * 5)).map(m => `<option value="${m}">${m}</option>`).join('');
+}
+function setTimeSelectValue(hSel, mSel, timeStr) {
+  const [h, m] = (timeStr || '').split(':');
+  hSel.value = h || '';
+  mSel.value = m || '';
+}
+function getTimeSelectValue(hSel, mSel) {
+  if (hSel.value === '' || mSel.value === '') return '';
+  return `${hSel.value}:${mSel.value}`;
+}
 function toast(msg) {
   const t = $('toast');
   t.textContent = msg;
@@ -216,19 +232,39 @@ function fmtDT(v) {
 
 $('btnAddFlight').addEventListener('click', () => openFlightModal(null));
 
+function splitDateTime(v) {
+  if (!v) return { date: '', h: '', m: '' };
+  const [date, time] = v.split('T');
+  const [h, m] = (time || '').split(':');
+  return { date: date || '', h: h || '', m: m || '' };
+}
+['flFromCode', 'flToCode'].forEach(id => {
+  $(id).addEventListener('input', (e) => {
+    const pos = e.target.selectionStart;
+    e.target.value = e.target.value.toUpperCase();
+    e.target.setSelectionRange(pos, pos);
+  });
+});
+
 function openFlightModal(id) {
   const trip = getActiveTrip();
   if (!trip) { toast('먼저 여행을 만들어주세요'); return; }
   editingFlightId = id;
   const fl = id ? trip.flights.find(f => f.id === id) : null;
-  $('flTag').value = fl?.tag || '';
+  $('flTag').value = fl?.tag || '출발';
   $('flNo').value = fl?.no || '';
   $('flFromCode').value = fl?.fromCode || '';
-  $('flToCode').value = fl?.toCode || '';
+  $('flToCode').value = fl?.toCode || (id ? '' : 'ICN');
   $('flFromCity').value = fl?.fromCity || '';
   $('flToCity').value = fl?.toCity || '';
-  $('flDep').value = fl?.dep || '';
-  $('flArr').value = fl?.arr || '';
+  const dep = splitDateTime(fl?.dep);
+  $('flDepDate').value = dep.date;
+  $('flDepH').value = dep.h;
+  $('flDepM').value = dep.m;
+  const arr = splitDateTime(fl?.arr);
+  $('flArrDate').value = arr.date;
+  $('flArrH').value = arr.h;
+  $('flArrM').value = arr.m;
   $('flNote').value = fl?.note || '';
   $('btnDeleteFlight').style.display = id ? '' : 'none';
   openModal('flightModal');
@@ -236,18 +272,22 @@ function openFlightModal(id) {
 $('btnSaveFlight').addEventListener('click', () => {
   const trip = getActiveTrip();
   if (!trip) return;
+  const depDate = $('flDepDate').value;
+  const depTime = getTimeSelectValue($('flDepH'), $('flDepM'));
+  const arrDate = $('flArrDate').value;
+  const arrTime = getTimeSelectValue($('flArrH'), $('flArrM'));
   const data = {
-    tag: $('flTag').value.trim(),
+    tag: $('flTag').value,
     no: $('flNo').value.trim(),
     fromCode: $('flFromCode').value.trim().toUpperCase(),
     toCode: $('flToCode').value.trim().toUpperCase(),
     fromCity: $('flFromCity').value.trim(),
     toCity: $('flToCity').value.trim(),
-    dep: $('flDep').value,
-    arr: $('flArr').value,
+    dep: (depDate && depTime) ? `${depDate}T${depTime}` : '',
+    arr: (arrDate && arrTime) ? `${arrDate}T${arrTime}` : '',
     note: $('flNote').value.trim()
   };
-  if (!data.dep) { toast('출발 날짜·시간을 입력해주세요'); return; }
+  if (!data.dep) { toast('출발 날짜·시간을 모두 선택해주세요'); return; }
   if (editingFlightId) {
     Object.assign(trip.flights.find(f => f.id === editingFlightId), data);
   } else {
@@ -304,20 +344,23 @@ function ensureSelectedDay(trip) {
 
 function renderDayTabs() {
   const trip = getActiveTrip();
-  const wrap = $('dayTabs');
-  wrap.innerHTML = '';
+  const wraps = [$('dayTabs'), $('dayTabsOverview')];
+  wraps.forEach(w => w.innerHTML = '');
   if (!trip) return;
-  dayList(trip).forEach(d => {
-    const el = document.createElement('div');
-    el.className = 'day-tab' + (d.date === selectedDay ? ' active' : '');
-    el.innerHTML = `<div class="dow">${d.dow}</div><div class="dnum">${fmtMD(d.date)}</div>${d.city ? `<div class="dcity">${escapeHtml(d.city)}</div>` : ''}`;
-    el.addEventListener('click', () => {
-      selectedDay = d.date;
-      renderDayTabs();
-      renderEvents();
-      if ($('tab-overview').classList.contains('active')) renderMapForSelectedDay();
+  const days = dayList(trip);
+  wraps.forEach(wrap => {
+    days.forEach(d => {
+      const el = document.createElement('div');
+      el.className = 'day-tab' + (d.date === selectedDay ? ' active' : '');
+      el.innerHTML = `<div class="dow">${d.dow}</div><div class="dnum">${fmtMD(d.date)}</div>${d.city ? `<div class="dcity">${escapeHtml(d.city)}</div>` : ''}`;
+      el.addEventListener('click', () => {
+        selectedDay = d.date;
+        renderDayTabs();
+        renderEvents();
+        if ($('tab-overview').classList.contains('active')) renderMapForSelectedDay();
+      });
+      wrap.appendChild(el);
     });
-    wrap.appendChild(el);
   });
 }
 
@@ -407,14 +450,14 @@ function openEventModal(id) {
   const ev = id ? (trip.days[selectedDay] || []).find(e => e.id === id) : null;
   $('eventModalTitle').textContent = id ? '일정 편집' : '일정 추가';
   $('fType').value = ev?.type || '기타';
-  $('fTime').value = ev?.time || '';
+  setTimeSelectValue($('fTimeH'), $('fTimeM'), ev?.time || '');
   $('fName').value = ev?.name || '';
   $('fPlace').value = ev?.place || '';
   $('fMapUrl').value = ev?.mapUrl || '';
   $('fMove').value = ev?.move || '';
   $('fAmount').value = ev?.amount ?? '';
   $('fCurrency').value = ev?.currency || '원';
-  $('fAlarm').value = ev?.alarm || '';
+  setTimeSelectValue($('fAlarmH'), $('fAlarmM'), ev?.alarm || '');
   $('fNote').value = ev?.note || '';
   pendingAttachments = ev?.attachments ? ev.attachments.slice() : [];
   renderAttachPreview();
@@ -456,7 +499,7 @@ function fileToDataUrl(file) {
   });
 }
 
-$('btnClearAlarm').addEventListener('click', () => { $('fAlarm').value = ''; });
+$('btnClearAlarm').addEventListener('click', () => { $('fAlarmH').value = ''; $('fAlarmM').value = ''; });
 
 $('btnSaveEvent').addEventListener('click', () => {
   const trip = getActiveTrip();
@@ -465,14 +508,14 @@ $('btnSaveEvent').addEventListener('click', () => {
   if (!name) { toast('이름을 입력해주세요'); return; }
   const data = {
     type: $('fType').value,
-    time: $('fTime').value,
+    time: getTimeSelectValue($('fTimeH'), $('fTimeM')),
     name,
     place: $('fPlace').value.trim(),
     mapUrl: $('fMapUrl').value.trim(),
     move: $('fMove').value.trim(),
     amount: $('fAmount').value ? Number($('fAmount').value) : null,
     currency: $('fCurrency').value,
-    alarm: $('fAlarm').value || null,
+    alarm: getTimeSelectValue($('fAlarmH'), $('fAlarmM')) || null,
     note: $('fNote').value.trim(),
     attachments: pendingAttachments
   };
@@ -578,7 +621,6 @@ $('btnResetAll').addEventListener('click', () => {
 });
 
 /* ---------- ICS export ---------- */
-function pad(n) { return String(n).padStart(2, '0'); }
 function icsDT(dateStr, timeStr) {
   const [y, m, d] = dateStr.split('-');
   const [hh, mm] = (timeStr || '00:00').split(':');
@@ -662,7 +704,7 @@ async function geocode(query) {
 
 function initMap() {
   if (map) return;
-  map = L.map('map').setView([38.7, -9.14], 12);
+  map = L.map('map').setView(SEOUL, 12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap contributors',
     maxZoom: 19
@@ -694,7 +736,7 @@ async function renderMapForSelectedDay() {
     routeLine = L.polyline(latlngs, { color: '#2b6cb0', weight: 3, dashArray: '6,6' }).addTo(map);
     map.fitBounds(L.latLngBounds(latlngs), { padding: [30, 30] });
   } else {
-    map.setView([38.7, -9.14], 5);
+    map.setView(SEOUL, 12);
   }
 }
 
@@ -756,6 +798,10 @@ function onTripChanged() {
 
 /* ---------- init ---------- */
 (function init() {
+  populateTimeSelect($('fTimeH'), $('fTimeM'));
+  populateTimeSelect($('fAlarmH'), $('fAlarmM'));
+  populateTimeSelect($('flDepH'), $('flDepM'));
+  populateTimeSelect($('flArrH'), $('flArrM'));
   if (!DATA.activeTripId && DATA.trips.length) DATA.activeTripId = DATA.trips[0].id;
   onTripChanged();
 })();
