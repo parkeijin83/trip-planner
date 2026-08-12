@@ -21,6 +21,7 @@ let pendingAttachments = [];
 let map = null, markersLayer = null, routeLine = null;
 let routePoints = [];
 let routeStepIndex = -1;
+let dayUnresolvedCount = 0;
 const firedAlarms = new Set();
 
 /* ---------- utils ---------- */
@@ -796,20 +797,26 @@ setInterval(() => {
 }, 20000);
 
 /* ---------- map / overview ---------- */
-async function geocode(query) {
-  if (!query) return null;
-  if (DATA.geocache[query]) return DATA.geocache[query];
+async function geocodeRaw(q) {
+  if (Object.prototype.hasOwnProperty.call(DATA.geocache, q)) return DATA.geocache[q];
+  let result = null;
   try {
-    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`);
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`);
     const arr = await res.json();
-    if (arr && arr[0]) {
-      const p = { lat: parseFloat(arr[0].lat), lon: parseFloat(arr[0].lon) };
-      DATA.geocache[query] = p;
-      saveData();
-      return p;
-    }
-  } catch (e) { console.error('geocode failed', e); }
-  return null;
+    if (arr && arr[0]) result = { lat: parseFloat(arr[0].lat), lon: parseFloat(arr[0].lon) };
+  } catch (e) {
+    console.error('geocode failed', e);
+    return null; // network error: don't cache as a permanent miss
+  }
+  DATA.geocache[q] = result;
+  saveData();
+  return result;
+}
+async function geocode(query, context) {
+  if (!query) return null;
+  let p = await geocodeRaw(query);
+  if (!p && context) p = await geocodeRaw(`${query} ${context}`);
+  return p;
 }
 
 function initMap() {
@@ -829,12 +836,15 @@ async function renderMapForSelectedDay() {
   if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
   routePoints = [];
   routeStepIndex = -1;
+  dayUnresolvedCount = 0;
   if (!trip || !selectedDay) { renderStepBar(); return; }
+  const cityContext = dayList(trip).find(d => d.date === selectedDay)?.city || '';
   const events = (trip.days[selectedDay] || []).slice().sort((a, b) => (a.time || '').localeCompare(b.time || ''));
   for (const ev of events) {
     const q = ev.place || ev.name;
-    const p = await geocode(q);
+    const p = await geocode(q, cityContext);
     if (p) routePoints.push({ ev, lat: p.lat, lon: p.lon });
+    else dayUnresolvedCount++;
   }
   routePoints.forEach((pt, i) => {
     const icon = L.divIcon({
@@ -878,7 +888,9 @@ function renderStepBar() {
   });
   if (!n) {
     bar.style.width = '0%';
-    summary.innerHTML = '일정을 추가하면 동선이 여기 표시돼요';
+    summary.innerHTML = dayUnresolvedCount > 0
+      ? `📍 일정 ${dayUnresolvedCount}개의 위치를 못 찾았어요 · <span class="sub">일정 편집 → 지도 검색어를 더 정확히 입력해보세요</span>`
+      : '일정을 추가하면 동선이 여기 표시돼요';
     $('btnStepPrev').disabled = true;
     $('btnStepNext').disabled = true;
     return;
