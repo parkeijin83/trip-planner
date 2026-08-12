@@ -1055,7 +1055,7 @@ function renderStepBar() {
   const el = pt.marker.getElement();
   if (el) el.querySelector('.route-pin-outer')?.classList.add('active');
   pt.marker.getTooltip()?.getElement()?.classList.add('active');
-  const duration = 0.6;
+  const duration = 1.8;
   const movingForward = lastRenderedStepIndex === routeStepIndex - 1;
   if (movingForward && pt.legPath) {
     animateWalker(pt.legPath, duration * 1000, MOVE_ICON[pt.ev.move] || '🚶');
