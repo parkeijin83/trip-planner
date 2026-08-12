@@ -701,6 +701,7 @@ document.querySelectorAll('.modal-backdrop').forEach(bd => {
 $('btnSettings').addEventListener('click', () => {
   const trip = getActiveTrip();
   $('sTitle').value = trip ? trip.title : '';
+  $('sCities').value = trip ? trip.cities.join(', ') : '';
   openModal('settingsModal');
 });
 $('btnSaveTitle').addEventListener('click', () => {
@@ -713,6 +714,15 @@ $('btnSaveTitle').addEventListener('click', () => {
   renderHeader();
   renderTripSelect();
   toast('제목이 저장되었어요');
+});
+$('btnSaveCities').addEventListener('click', () => {
+  const trip = getActiveTrip();
+  if (!trip) return;
+  trip.cities = $('sCities').value.split(',').map(s => s.trim()).filter(Boolean);
+  saveData();
+  renderDayTabs();
+  if ($('tab-overview').classList.contains('active')) renderMapForSelectedDay();
+  toast('도시가 저장되었어요');
 });
 $('sHeaderPhoto').addEventListener('change', async (e) => {
   const trip = getActiveTrip();
