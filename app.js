@@ -1099,11 +1099,13 @@ function renderStepBar() {
   lastRenderedStepIndex = routeStepIndex;
   if (movingForward && pt.legPath) {
     // Zoom to fit both endpoints of this leg (the curve/route between them) while the icon animates across it.
+    // fitBounds (simple pan+zoom) is used instead of flyToBounds — Leaflet's "fly" curve computes bogus
+    // intermediate zoom/center (briefly zoom 0 at a wrong wrapped longitude) for very long antimeridian-crossing legs.
     animateWalker(pt.legPath, walkDurationMs, MOVE_ICON[pt.ev.move] || '🚶');
-    map.flyToBounds(L.latLngBounds(pt.legPath), { padding: [50, 50], maxZoom: 17, duration: walkDurationMs / 1000 });
+    map.fitBounds(L.latLngBounds(pt.legPath), { padding: [50, 50], maxZoom: 17, animate: true, duration: walkDurationMs / 1000 });
   } else {
     if (walkerMarker) walkerMarker.setOpacity(0);
-    map.flyToBounds(L.latLngBounds([[pt.lat, pt.lon]]), { padding: [60, 60], maxZoom: 16, duration: 0.5 });
+    map.setView([pt.lat, pt.lon], Math.min(Math.max(map.getZoom(), 15), 16), { animate: true, duration: 0.5 });
   }
   pt.marker.openTooltip();
 }
