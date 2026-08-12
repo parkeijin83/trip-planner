@@ -874,6 +874,18 @@ function pathLength(path) {
   for (let i = 1; i < path.length; i++) d += Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]);
   return d;
 }
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+function pathLengthKm(path) {
+  let d = 0;
+  for (let i = 1; i < path.length; i++) d += haversineKm(path[i - 1][0], path[i - 1][1], path[i][0], path[i][1]);
+  return d;
+}
 function pointAtFraction(path, frac) {
   if (path.length === 1) return path[0];
   const total = pathLength(path);
@@ -1055,10 +1067,12 @@ function renderStepBar() {
   const el = pt.marker.getElement();
   if (el) el.querySelector('.route-pin-outer')?.classList.add('active');
   pt.marker.getTooltip()?.getElement()?.classList.add('active');
-  const duration = 1.8;
+  const legMeters = pt.legPath ? pathLengthKm(pt.legPath) * 1000 : 0;
+  const walkDurationMs = Math.min(4200, Math.max(1600, legMeters * 4));
+  const duration = walkDurationMs / 1000;
   const movingForward = lastRenderedStepIndex === routeStepIndex - 1;
   if (movingForward && pt.legPath) {
-    animateWalker(pt.legPath, duration * 1000, MOVE_ICON[pt.ev.move] || '🚶');
+    animateWalker(pt.legPath, walkDurationMs, MOVE_ICON[pt.ev.move] || '🚶');
   } else if (walkerMarker) {
     walkerMarker.setOpacity(0);
   }
