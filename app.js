@@ -849,9 +849,9 @@ async function renderMapForSelectedDay() {
   routePoints.forEach((pt, i) => {
     const icon = L.divIcon({
       className: 'route-pin-wrap',
-      html: `<div class="route-pin type-${escapeHtml(pt.ev.type)}"><span class="emoji">${TYPE_ICON[pt.ev.type] || '📝'}</span><span class="num">${i + 1}</span></div>`,
-      iconSize: [30, 30],
-      iconAnchor: [15, 28]
+      html: `<div class="route-pin-outer"><div class="pulse-ring"></div><div class="route-pin type-${escapeHtml(pt.ev.type)}"><span class="emoji">${TYPE_ICON[pt.ev.type] || '📝'}</span><span class="num">${i + 1}</span></div></div>`,
+      iconSize: [44, 44],
+      iconAnchor: [22, 36]
     });
     const m = L.marker([pt.lat, pt.lon], { icon }).addTo(markersLayer);
     m.bindTooltip(`${pt.ev.time ? pt.ev.time + ' ' : ''}${escapeHtml(pt.ev.name)}`, { permanent: true, direction: 'top', offset: [0, -26], className: 'route-pin-label' });
@@ -880,14 +880,16 @@ function focusEventOnMap(ev) {
 function renderStepBar() {
   const bar = $('routeProgressBar');
   const summary = $('routeStepSummary');
+  const counter = $('routeStepCounter');
   const n = routePoints.length;
   routePoints.forEach(pt => {
     const el = pt.marker.getElement();
-    if (el) el.querySelector('.route-pin')?.classList.remove('active');
+    if (el) el.querySelector('.route-pin-outer')?.classList.remove('active');
     pt.marker.getTooltip()?.getElement()?.classList.remove('active');
   });
   if (!n) {
     bar.style.width = '0%';
+    counter.innerHTML = '';
     summary.innerHTML = dayUnresolvedCount > 0
       ? `📍 일정 ${dayUnresolvedCount}개의 위치를 못 찾았어요 · <span class="sub">일정 편집 → 지도 검색어를 더 정확히 입력해보세요</span>`
       : '일정을 추가하면 동선이 여기 표시돼요';
@@ -895,6 +897,8 @@ function renderStepBar() {
     $('btnStepNext').disabled = true;
     return;
   }
+  const cur = routeStepIndex === -1 ? 0 : Math.min(routeStepIndex + 1, n);
+  counter.innerHTML = `오늘의 여정 <b>${cur}</b> / <b>${n}</b> · <span class="sub">실제 이동 경로</span>`;
   $('btnStepPrev').disabled = routeStepIndex <= -1;
   $('btnStepNext').disabled = routeStepIndex >= n;
   if (routeStepIndex === -1) {
@@ -911,7 +915,7 @@ function renderStepBar() {
   const pt = routePoints[routeStepIndex];
   summary.innerHTML = `${pt.ev.time ? escapeHtml(pt.ev.time) + ' ' : ''}${escapeHtml(pt.ev.name)}${pt.ev.move ? `<span class="sub">🚶 ${escapeHtml(pt.ev.move)}</span>` : ''}`;
   const el = pt.marker.getElement();
-  if (el) el.querySelector('.route-pin')?.classList.add('active');
+  if (el) el.querySelector('.route-pin-outer')?.classList.add('active');
   pt.marker.getTooltip()?.getElement()?.classList.add('active');
   map.flyTo([pt.lat, pt.lon], Math.max(map.getZoom(), 15), { duration: 0.4 });
   pt.marker.openTooltip();
